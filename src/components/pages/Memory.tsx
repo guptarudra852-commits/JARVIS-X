@@ -1,0 +1,535 @@
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
+import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2 } from "lucide-react";
+import { MemoryCard } from "../../types";
+
+interface MemoryProps {
+  onLogMessage: (level: "INFO" | "WARN" | "CORE" | "ERROR", text: string) => void;
+}
+
+export default function Memory({ onLogMessage }: MemoryProps) {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [filterCategory, setFilterCategory] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<"relevance" | "date">("relevance");
+  const [memories, setMemories] = useState<MemoryCard[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // States for dynamic schematic image compilation
+  const [editImageUrl, setEditImageUrl] = useState("");
+  const [generatingImage, setGeneratingImage] = useState(false);
+
+  // Load memories from dynamic database on disk & Firestore proxy
+  useEffect(() => {
+    let active = true;
+    const fetchMemories = async () => {
+      try {
+        setLoading(true);
+        const res = await fetch("/api/memories");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (active) {
+          setMemories(data);
+          onLogMessage("INFO", `Synchronized ${data.length} persistent synapse profiles with dataset files.`);
+        }
+      } catch (err: any) {
+        console.error("Failed to load synaptic memories:", err);
+        if (active) {
+          onLogMessage("ERROR", `Failed to map synapses from files: ${err.message}`);
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    fetchMemories();
+    return () => { active = false; };
+  }, []);
+
+  const [isEditingId, setIsEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [editCategory, setEditCategory] = useState<"personal" | "task" | "preference" | "system">("preference");
+
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleDelete = async (id: string) => {
+    const deleted = memories.find((m) => m.id === id);
+    try {
+      const res = await fetch(`/api/memories/${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete request failed");
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+      onLogMessage("WARN", `Pruned persistent synapse: "${deleted?.title}"`);
+    } catch (err: any) {
+      onLogMessage("ERROR", `Failed to delete dynamic database record: ${err.message}`);
+    }
+  };
+
+  const startEdit = (card: MemoryCard) => {
+    setIsEditingId(card.id);
+    setEditTitle(card.title);
+    setEditContent(card.content);
+    setEditCategory(card.category);
+    setEditImageUrl(card.imageUrl || "");
+  };
+
+  const handleGenerateImage = async () => {
+    const promptToUse = editTitle || editContent || "Neural Synaptic Vector State";
+    try {
+      setGeneratingImage(true);
+      onLogMessage("INFO", `Initiating visual compilation for synapse vector: "${promptToUse}"`);
+      const res = await fetch("/api/generate-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: promptToUse })
+      });
+      if (!res.ok) throw new Error("Visual generation connection refused or timed out.");
+      const data = await res.json();
+      setEditImageUrl(data.imageUrl);
+      onLogMessage("CORE", `Visual schematic matrix finalized and loaded for "${promptToUse}"`);
+    } catch (err: any) {
+      onLogMessage("ERROR", `Synaptic visual compilation failed: ${err.message}`);
+    } finally {
+      setGeneratingImage(false);
+    }
+  };
+
+  const saveEdit = async (id: string) => {
+    try {
+      const targetMemory = memories.find(m => m.id === id);
+      const res = await fetch("/api/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          title: editTitle,
+          content: editContent,
+          category: editCategory,
+          relevance: targetMemory?.relevance || 99,
+          imageUrl: editImageUrl
+        })
+      });
+      if (!res.ok) throw new Error("Update request failed");
+      const data = await res.json();
+      
+      setMemories((prev) =>
+        prev.map((m) => (m.id === id ? data.item : m))
+      );
+      setIsEditingId(null);
+      setEditImageUrl("");
+      onLogMessage("INFO", `Synced changes to database file with schematic visual: "${editTitle}"`);
+    } catch (err: any) {
+      onLogMessage("ERROR", `Failed to record synapses: ${err.message}`);
+    }
+  };
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editTitle || !editContent) return;
+
+    try {
+      const res = await fetch("/api/memories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle,
+          content: editContent,
+          category: editCategory,
+          relevance: 100,
+          imageUrl: editImageUrl
+        })
+      });
+      if (!res.ok) throw new Error("Create request failed");
+      const data = await res.json();
+
+      setMemories((prev) => [data.item, ...prev]);
+      setIsCreating(false);
+      setEditTitle("");
+      setEditContent("");
+      setEditImageUrl("");
+      onLogMessage("CORE", `Successfully injected persistent synapse with visual card schematic: "${data.item.title}"`);
+    } catch (err: any) {
+      onLogMessage("ERROR", `Failed to inject synapse: ${err.message}`);
+    }
+  };
+
+  const filteredMemories = memories.filter((mem) => {
+    const matchesSearch = mem.title.toLowerCase().includes(searchTerm.toLowerCase()) || mem.content.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesCategory = filterCategory === "all" || mem.category === filterCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const sortedMemories = [...filteredMemories].sort((a, b) => {
+    if (sortBy === "relevance") {
+      const relA = typeof a.relevance === "number" ? a.relevance : 0;
+      const relB = typeof b.relevance === "number" ? b.relevance : 0;
+      if (relB !== relA) {
+        return relB - relA;
+      }
+      return (b.timestamp || "").localeCompare(a.timestamp || "");
+    } else {
+      return (b.timestamp || "").localeCompare(a.timestamp || "");
+    }
+  });
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8 text-white relative">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-cyan-500/10 pb-6 mb-8">
+        <div>
+          <h1 className="text-3xl font-sans font-black tracking-tight text-white flex items-center gap-3">
+            <BrainCircuit className="text-cyan-400 shrink-0 animate-pulse" /> MEMORY STORAGE CENTER
+          </h1>
+          <p className="text-xs font-mono text-cyan-400/60 mt-1 uppercase">PERSISTENT SYSTEM MEMORY PARADIGMS AND CONTEXT VECTOR FIELDS</p>
+        </div>
+
+        {/* Action button to create */}
+        <button
+          id="create-synapse-button"
+          onClick={() => {
+            setIsCreating(!isCreating);
+            setIsEditingId(null);
+            setEditTitle("");
+            setEditContent("");
+            setEditImageUrl("");
+          }}
+          className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-lg text-xs font-mono transition-all cursor-pointer"
+        >
+          <Plus size={14} /> {isCreating ? "CANCEL_EDIT" : "CREATE_SYNAPSE"}
+        </button>
+      </div>
+
+      {/* Grid Filter Toolbar */}
+      <div className="flex flex-col lg:flex-row items-center justify-between gap-4 bg-black/30 border border-cyan-500/10 p-4 rounded-xl mb-6 font-sans">
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
+          <div className="relative w-full sm:w-64">
+            <Search size={14} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-cyan-400/40" />
+            <input
+              type="text"
+              placeholder="Search Memory Matrices..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-8 pr-3 py-1.5 bg-cyan-950/15 border border-cyan-500/20 rounded text-xs select-text w-full focus:outline-none focus:border-cyan-400 text-cyan-200"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 bg-cyan-950/20 border border-cyan-500/10 p-1 rounded-lg w-full sm:w-auto justify-center">
+            <ArrowUpDown size={11} className="text-cyan-400/50" />
+            <span className="text-[9px] font-mono text-cyan-400/50 uppercase tracking-widest px-0.5 select-none">SORT:</span>
+            <button
+              id="sort-relevance-button"
+              type="button"
+              onClick={() => {
+                setSortBy("relevance");
+                onLogMessage("INFO", "Re-indexed memory core state sorted by contextual relevance descending.");
+              }}
+              className={`px-2.5 py-1 font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer rounded-md ${
+                sortBy === "relevance"
+                  ? "bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold"
+                  : "border border-transparent text-gray-400 hover:text-cyan-400"
+              }`}
+            >
+              Relevance
+            </button>
+            <button
+              id="sort-date-button"
+              type="button"
+              onClick={() => {
+                setSortBy("date");
+                onLogMessage("INFO", "Re-indexed memory core state sorted by date created descending.");
+              }}
+              className={`px-2.5 py-1 font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer rounded-md ${
+                sortBy === "date"
+                  ? "bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold"
+                  : "border border-transparent text-gray-400 hover:text-cyan-400"
+              }`}
+            >
+              Date Created
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto text-xs py-1 whitespace-nowrap justify-center sm:justify-start">
+          {["all", "preference", "task", "system", "personal"].map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setFilterCategory(cat)}
+              className={`px-3 py-1 border rounded font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer ${
+                filterCategory === cat
+                  ? "border-cyan-400 bg-cyan-500/10 text-cyan-300 font-bold"
+                  : "border-white/5 hover:border-cyan-500/20 text-gray-400"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* CREATE NEW FORM */}
+      {isCreating && (
+        <form onSubmit={handleCreate} className="p-6 border border-cyan-500/30 bg-black/60 rounded-xl mb-8 space-y-4">
+          <h2 className="text-sm font-mono font-bold text-cyan-400 uppercase tracking-widest">[Inject New Semantic Vector]</h2>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[10px] font-mono text-cyan-400/50 uppercase mb-1">Synapse Title</label>
+              <input
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                placeholder="e.g., Target Velocity Thresholds"
+                className="w-full px-3 py-2 bg-cyan-950/10 border border-cyan-500/20 rounded text-xs select-text focus:outline-none focus:border-cyan-400 text-white font-semibold"
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-mono text-cyan-400/50 uppercase mb-1">Synaptic Core Category</label>
+              <select
+                value={editCategory}
+                onChange={(e) => setEditCategory(e.target.value as any)}
+                className="w-full px-3 py-2 bg-cyan-950/20 border border-cyan-500/20 rounded text-xs focus:outline-none focus:border-cyan-400 text-cyan-200"
+              >
+                <option value="preference">PREFERENCE</option>
+                <option value="task">TASK</option>
+                <option value="system">SYSTEM</option>
+                <option value="personal">PERSONAL</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-mono text-cyan-400/50 uppercase mb-1">Synaptic Memories Content Description</label>
+            <textarea
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              placeholder="Store precise context details to let JARVIS integrate seamlessly..."
+              rows={4}
+              className="w-full px-3 py-2 bg-cyan-950/10 border border-cyan-500/20 rounded text-xs select-text focus:outline-none focus:border-cyan-400 text-white"
+              required
+            />
+          </div>
+
+          <div className="border border-cyan-500/10 bg-cyan-950/5 p-4 rounded-lg space-y-3">
+            <label className="block text-[10px] font-mono text-cyan-400/50 uppercase tracking-wider">AI Synaptic Visual schematic</label>
+            <div className="flex flex-col md:flex-row gap-4 items-center">
+              <div className="w-32 h-32 shrink-0 bg-black/50 border border-cyan-500/20 rounded-lg flex items-center justify-center overflow-hidden relative group/preview">
+                {editImageUrl ? (
+                  <img
+                    src={editImageUrl}
+                    alt="Synaptic Schema Preview"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center p-2 text-gray-500">
+                    <ImageIcon size={24} className="mx-auto text-cyan-500/20 mb-1" />
+                    <span className="text-[8px] font-mono uppercase tracking-tight block">No Schema Compiled</span>
+                  </div>
+                )}
+                {generatingImage && (
+                  <div className="absolute inset-0 bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center text-center p-1">
+                    <Loader2 size={16} className="text-cyan-400 animate-spin mb-1" />
+                    <span className="text-[8px] font-mono uppercase tracking-widest text-cyan-400 animate-pulse">COMPILING...</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 space-y-2">
+                <p className="text-[10px] text-gray-400 leading-normal">
+                  Inject stylized holographic sci-fi vector graphics synthesized dynamically using the 
+                  <span className="text-cyan-400 font-mono"> procedural neural SVG</span> model parameters.
+                </p>
+                <button
+                  type="button"
+                  id="compile-schematic-button"
+                  onClick={handleGenerateImage}
+                  disabled={generatingImage}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/35 text-cyan-300 rounded font-mono text-[9px] uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <Sparkles size={11} className={generatingImage ? "animate-spin" : ""} />
+                  {generatingImage ? "COMPILING_SYNAPSE_CORE..." : "COMPILE_NEURAL_VISUAL_SCHEMATIC"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsCreating(false)}
+              className="px-4 py-2 border border-white/10 hover:border-white/20 rounded text-xs font-mono font-bold cursor-pointer"
+            >
+              CANCEL
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded text-xs font-mono shadow-[0_0_15px_rgba(6,182,212,0.3)] cursor-pointer"
+            >
+              RECORD_SYNAPSE
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* LIST MEMORIES CARD GRID */}
+      {loading ? (
+        <div className="text-center py-12 border border-cyan-500/10 rounded-xl font-mono text-xs text-cyan-400 animate-pulse uppercase">
+          [Connecting Neural Channel] Querying Synapse Archive Matrices...
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {sortedMemories.map((mem) => {
+            const isEditing = isEditingId === mem.id;
+            return (
+              <div
+                key={mem.id}
+                className="p-5 bg-black/45 border border-cyan-500/15 hover:border-cyan-500/30 rounded-xl backdrop-blur-md relative overflow-hidden group transition-all"
+              >
+                {isEditing ? (
+                  // Editing view inside the card
+                  <div className="space-y-4">
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      className="w-full px-2 py-1 bg-cyan-950/25 border border-cyan-500/40 rounded text-xs select-text text-white font-mono font-bold"
+                    />
+                    <select
+                      value={editCategory}
+                      onChange={(e) => setEditCategory(e.target.value as any)}
+                      className="w-full px-2 py-1 bg-cyan-950/30 border border-cyan-500/30 rounded text-xs text-cyan-200"
+                    >
+                      <option value="preference">PREFERENCE</option>
+                      <option value="task">TASK</option>
+                      <option value="system">SYSTEM</option>
+                      <option value="personal">PERSONAL</option>
+                    </select>
+                    <textarea
+                      value={editContent}
+                      onChange={(e) => setEditContent(e.target.value)}
+                      className="w-full px-2 py-1 bg-cyan-950/25 border border-cyan-500/40 rounded text-xs select-text text-gray-300"
+                      rows={3}
+                    />
+
+                    {/* Inline Image Control for Edits */}
+                    <div className="border border-cyan-500/10 p-2.5 bg-black/40 rounded-lg flex items-center gap-3">
+                      <div className="w-12 h-12 shrink-0 bg-black/60 border border-cyan-500/20 rounded overflow-hidden relative">
+                        {editImageUrl ? (
+                          <img
+                            src={editImageUrl}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                            alt="Synaptic thumbnail preview"
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-cyan-500/30">
+                            <ImageIcon size={14} />
+                          </div>
+                        )}
+                        {generatingImage && (
+                          <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
+                            <Loader2 size={12} className="text-cyan-400 animate-spin" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <span className="text-[8px] font-mono text-cyan-400/50 uppercase tracking-widest block mb-1">Schematic Visual Matrix</span>
+                        <button
+                          type="button"
+                          onClick={handleGenerateImage}
+                          disabled={generatingImage}
+                          className="px-2 py-1 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-[8px] font-mono rounded text-cyan-300 disabled:opacity-50 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Sparkles size={8} className={generatingImage ? "animate-spin" : ""} />
+                          {generatingImage ? "COMPILING..." : "RECOMPILE_VISUAL"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingId(null)}
+                        className="px-2.5 py-1 border border-white/10 text-[10px] font-mono rounded cursor-pointer"
+                      >
+                        ABORT
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(mem.id)}
+                        className="px-2.5 py-1 bg-cyan-500 text-black font-semibold text-[10px] font-mono rounded flex items-center gap-1 cursor-pointer"
+                      >
+                        <Save size={10} /> SAVE
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // standard display view
+                  <>
+                    <div className="flex items-start justify-between mb-3 border-b border-cyan-500/10 pb-2">
+                      <div className="flex items-center gap-2">
+                        <Bookmark size={14} className="text-cyan-400 shrink-0" />
+                        <h3 className="font-mono text-xs font-bold text-white uppercase tracking-wide truncate max-w-[12rem]">{mem.title}</h3>
+                      </div>
+                      <span className="px-1.5 py-0.5 bg-cyan-500/10 border border-cyan-500/20 text-[8px] font-mono text-cyan-300 rounded uppercase">
+                        {mem.category}
+                      </span>
+                    </div>
+
+                    {/* Integrated Synapse Schematic Visual */}
+                    {mem.imageUrl && (
+                      <div className="w-full h-36 mb-4 bg-black/60 border border-cyan-500/15 rounded-lg overflow-hidden relative group-hover:border-cyan-500/35 transition-colors">
+                        <img
+                          src={mem.imageUrl}
+                          alt={mem.title}
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover opacity-75 group-hover:opacity-100 transition-opacity"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-transparent to-transparent flex items-end p-2 md:p-3">
+                          <span className="text-[8px] font-mono text-cyan-400 uppercase tracking-widest bg-black/80 px-1.5 py-0.5 rounded border border-cyan-500/10 flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+                            SCHEMATIC COGNITIVE MAP ACTIVE
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <p className="text-xs text-gray-400 font-sans leading-relaxed min-h-[4rem] mb-4">
+                      {mem.content}
+                    </p>
+
+                    <div className="flex items-center justify-between mt-4 text-[9px] font-mono text-gray-500">
+                      <span>INDEXED: {mem.timestamp}</span>
+                      <span className="text-cyan-400 font-bold">RELEVANCE: {mem.relevance}%</span>
+                    </div>
+
+                    {/* Actions Float Trigger */}
+                    <div className="absolute top-4 right-4 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => startEdit(mem)}
+                        className="p-1.5 hover:bg-white/5 text-cyan-400 hover:text-cyan-300 rounded transition-all cursor-pointer"
+                        title="Update memory parameters"
+                      >
+                        <Edit3 size={11} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(mem.id)}
+                        className="p-1.5 hover:bg-white/5 text-gray-400 hover:text-red-400 rounded transition-all cursor-pointer"
+                        title="Prune memory"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+
+          {sortedMemories.length === 0 && (
+            <div className="md:col-span-2 text-center py-12 border border-cyan-500/10 rounded-xl font-mono text-xs text-gray-500">
+              NO CORRESPONDING SYNAPSES MAPPED IN ACTIVE CONTEXT
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,30 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helpers
+    function isSignedIn() { return request.auth != null; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isValidUser(data) {
+      return data.email is string && data.email.size() <= 254 && data.email.matches('^[^@]+@[^@]+\\.[^@]+$') &&
+             data.createdAt is timestamp; // Firestore timestamp in rules
+    }
+    
+    // Catch-all deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isSignedIn() && request.auth.uid == userId;
+      allow create: if isSignedIn() && request.auth.uid == userId && 
+                       isValidUser(request.resource.data) &&
+                       request.resource.data.createdAt == request.time;
+      allow update: if isSignedIn() && request.auth.uid == userId &&
+                       request.resource.data.email == resource.data.email &&
+                       request.resource.data.createdAt == resource.data.createdAt;
+    }
+  }
+}

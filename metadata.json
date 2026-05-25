@@ -1,0 +1,8 @@
+{
+  "name": "Jarvis X (2)",
+  "description": "An immersive, futuristic AI operating system featuring cinematic 3D visuals, holographic interfaces, and advanced autonomous task automation capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

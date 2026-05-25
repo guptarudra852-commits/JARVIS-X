@@ -1,0 +1,34 @@
+[
+  {
+    "id": "mem-1",
+    "title": "Preferred Workspace Sync",
+    "category": "preference",
+    "content": "Captain prefers to synchronize Workspace Documents relative to the space coordinates. Overrides automated backup logs outside space boundaries.",
+    "timestamp": "2026-05-20 18:42",
+    "relevance": 95
+  },
+  {
+    "id": "mem-2",
+    "title": "Reactor Fuel Cycle Threshold",
+    "category": "task",
+    "content": "Set automatic system warnings whenever reactor fuel loops plummet under critical threshold of fifteen percent capacity.",
+    "timestamp": "2026-05-18 12:05",
+    "relevance": 82
+  },
+  {
+    "id": "mem-3",
+    "title": "Tone Modulation Setup",
+    "category": "system",
+    "content": "Maintains a polite, refined British dialogue syntax. Avoids dramatic emotional outbursts unless in cases of alert levels higher than Level Two.",
+    "timestamp": "2026-05-15 09:30",
+    "relevance": 99
+  },
+  {
+    "id": "mem-4",
+    "title": "Captain's Favorite Espresso Blend",
+    "category": "personal",
+    "content": "Synthesizer core parameters should always brew Double Shot Ristretto with extra froth whenever sleep clocks map shorter than five hours.",
+    "timestamp": "2026-05-10 07:12",
+    "relevance": 75
+  }
+]
