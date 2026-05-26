@@ -43,7 +43,8 @@ import {
   Trash2,
   Mic,
   Loader2,
-  Check
+  Check,
+  Brain
 } from "lucide-react";
 
 import { PageId, NavigationItem, SystemLog } from "./types";
@@ -68,6 +69,7 @@ import Blog from "./components/pages/Blog";
 import LoginSignup from "./components/pages/LoginSignup";
 import Contact from "./components/pages/Contact";
 import Settings from "./components/pages/Settings";
+import Cognition from "./components/pages/Cognition";
 
 export interface ReferenceModel {
   id: string;
@@ -490,6 +492,7 @@ export default function App() {
     { id: "voice", label: "Voice Interface", iconName: "voice", category: "core" },
 
     { id: "dashboard", label: "Diagnostic Panel", iconName: "dashboard", category: "operating" },
+    { id: "cognition", label: "Cognitive Studio", iconName: "cognition", category: "operating" },
     { id: "assistant", label: "AI Chat Assistant", iconName: "assistant", category: "operating" },
     { id: "search", label: "JARVIS Search", iconName: "search", category: "operating" },
     { id: "memory", label: "Memory Storage", iconName: "memory", category: "operating" },
@@ -514,6 +517,7 @@ export default function App() {
       case "features": return <Award size={15} className={classProps} />;
       case "about": return <FileText size={15} className={classProps} />;
       case "dashboard": return <Activity size={15} className={classProps} />;
+      case "cognition": return <Brain size={15} className={classProps} />;
       case "assistant": return <MessageSquare size={15} className={classProps} />;
       case "search": return <Search size={15} className={classProps} />;
       case "memory": return <Database size={15} className={classProps} />;
@@ -545,6 +549,7 @@ export default function App() {
   const allCommands = [
     { title: "Open Core Home", subtitle: "Navigate to standard welcome frame", action: () => handleNavigate("home"), tags: ["welcome", "start", "hud"] },
     { title: "Open Diagnostic Panel", subtitle: "Inspect active system threads & loads", action: () => handleNavigate("dashboard"), tags: ["cpu", "memory", "stats", "process"] },
+    { title: "Open Cognitive Studio", subtitle: "Operate 10 specialized human cognitive skills", action: () => handleNavigate("cognition"), tags: ["brain", "ethics", "goals", "thoughts", "reasoning"] },
     { title: "Open AI Chat Assistant", subtitle: "Communicate directly with JARVIS neural core", action: () => handleNavigate("assistant"), tags: ["ai", "prompt", "chat", "talk"] },
     { title: "Open JARVIS Search", subtitle: "Real-time Google search grounding report compilation", action: () => handleNavigate("search"), tags: ["google", "sources", "news", "current"] },
     { title: "Open Memory Storage", subtitle: "Inspect persistent vector memories database", action: () => handleNavigate("memory"), tags: ["learning", "history", "recall"] },
@@ -1826,6 +1831,7 @@ export default function App() {
                 {activePage === "about" && <About />}
                 {activePage === "features" && <Features />}
                 {activePage === "dashboard" && <Dashboard />}
+                {activePage === "cognition" && <Cognition />}
                 {activePage === "assistant" && <Assistant onLogMessage={addTerminalLog} onNavigate={handleNavigate} />}
                 {activePage === "search" && <JarvisSearch onLogMessage={addTerminalLog} />}
                 {activePage === "memory" && <Memory onLogMessage={addTerminalLog} />}

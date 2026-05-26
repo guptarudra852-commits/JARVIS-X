@@ -18,7 +18,8 @@ export type PageId =
   | "contact"
   | "settings"
   | "vaultshield"
-  | "bloom";
+  | "bloom"
+  | "cognition";
 
 export interface NavigationItem {
   id: PageId;

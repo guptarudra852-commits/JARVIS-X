@@ -4,10 +4,15 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { Pool } from "pg";
+import helmet from "helmet";
+import cors from "cors";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
 
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1);
 const PORT = 3000;
 
 // Setup PostgreSQL Connection Pool for Supabase (if DATABASE_URL is provided)
@@ -94,6 +99,73 @@ if (apiKey) {
 
 // JSON Parser Middlware
 app.use(express.json());
+
+// Enable HTTP Security headers via Helmet
+const isProd = process.env.NODE_ENV === "production";
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      imgSrc: ["'self'", "data:", "https:", "http:"],
+      connectSrc: ["'self'", "https://openrouter.ai", "https://api.openai.com", "wss:", "ws:"],
+      frameAncestors: ["'self'", "https://*.google.com", "https://*.googleusercontent.com", "https://*.run.app"],
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: false,
+  frameguard: isProd ? { action: "deny" } : false // Prevent clickjacking in prod, allow in preview iframe
+}));
+
+// Configure Secure Explicit CORS Whitelist
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  process.env.APP_URL
+].filter(Boolean) as string[];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Return true for non-browser clients (like curl/postman) or matching origins
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".run.app")) {
+      callback(null, true);
+    } else {
+      callback(new Error("CORS Policy Violation: Origin not whitelisted."));
+    }
+  },
+  methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  credentials: true
+}));
+
+// Setup Robust Rate Limit Managers
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please try again later." },
+  handler: (req, res, next, options) => {
+    res.setHeader("Retry-After", "60");
+    return res.status(429).json({ error: options.message.error });
+  }
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "AI computational limit reached. Please wait a moment before requesting again." },
+  handler: (req, res, next, options) => {
+    res.setHeader("Retry-After", "10");
+    return res.status(429).json({ error: options.message.error });
+  }
+});
+
+// Apply general rate limit to all /api endpoints
+app.use("/api/", generalLimiter);
 
 // API health check
 app.get("/api/health", (req, res) => {
@@ -331,12 +403,23 @@ async function runOpenRouterQuery(messages: any[], openRouterKey: string, select
 }
 
 // Primary Chat Proxy Route
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", aiLimiter, async (req, res) => {
   try {
-    const { messages, model } = req.body;
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "Invalid request: 'messages' array is required." });
+    // Validate request body structure using Zod to secure against overflow/injection
+    const chatPayloadSchema = z.object({
+      messages: z.array(z.object({
+        role: z.string().max(50).trim(),
+        content: z.string().max(12000).trim()
+      })).min(1),
+      model: z.string().max(250).optional().nullable()
+    });
+
+    const parsed = chatPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid payload formatting, or input length exceeded safety parameters.", details: parsed.error.issues });
     }
+
+    const { messages, model } = parsed.data;
 
     const lastUserMsg = messages[messages.length - 1]?.content || "Hello";
 
@@ -348,25 +431,36 @@ app.post("/api/chat", async (req, res) => {
     }
 
     try {
-      const text = await runOpenRouterQuery(messages, openRouterKey, model);
+      const text = await runOpenRouterQuery(messages, openRouterKey, model || undefined);
       return res.json({ text });
     } catch (orErr: any) {
-      console.error("OpenRouter route execution failure:", orErr);
-      return res.status(500).json({ error: orErr.message || "All OpenRouter computational pipelines are offline." });
+      console.error("OpenRouter route execution failure (Sanitized):", orErr.message);
+      return res.status(500).json({ error: "All OpenRouter computational pipelines are offline. Please verify API key configuration." });
     }
   } catch (err: any) {
-    console.error("AI Proxy Error:", err);
-    res.status(500).json({ error: err.message || "Core Processing Overload. Request interrupted." });
+    console.error("AI Proxy Error (Sanitized):", err.message);
+    res.status(500).json({ error: "Core Processing Overload. Request interrupted." });
   }
 });
 
 // Dedicated Futuristic JARVIS Search Pipeline Endpoint
-app.post("/api/search", async (req, res) => {
+app.post("/api/search", aiLimiter, async (req, res) => {
   try {
-    const { query, deepSearch, image, pdfText, history } = req.body;
-    if (!query || typeof query !== "string") {
-      return res.status(400).json({ error: "Search query is required." });
+    // Schema validation for input parameters
+    const searchPayloadSchema = z.object({
+      query: z.string().min(1).max(1000).trim(),
+      deepSearch: z.boolean().optional(),
+      image: z.any().optional(),
+      pdfText: z.string().max(80000).optional().nullable(),
+      history: z.array(z.any()).optional()
+    });
+
+    const parsed = searchPayloadSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid payload formatting, or input length exceeded safety parameters.", details: parsed.error.issues });
     }
+
+    const { query, deepSearch, image, pdfText, history } = parsed.data;
 
     const lowerQuery = query.toLowerCase();
     let youtubeVideoId: string | null = null;
@@ -595,10 +689,21 @@ app.get("/api/memories", async (req, res) => {
 // Update or write memory to dynamic code files
 app.post("/api/memories", async (req, res) => {
   try {
-    const { id, title, category, content, relevance, imageUrl } = req.body;
-    if (!title || !content) {
-      return res.status(400).json({ error: "Title and content fields are required for database registration." });
+    const memorySchema = z.object({
+      id: z.string().max(250).optional().nullable(),
+      title: z.string().min(1).max(500).trim(),
+      category: z.string().max(250).optional().nullable(),
+      content: z.string().min(1).max(25000).trim(),
+      relevance: z.number().int().min(1).max(100).optional().nullable(),
+      imageUrl: z.string().max(2000).optional().nullable()
+    });
+
+    const parsed = memorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid registration payload configuration.", details: parsed.error.issues });
     }
+
+    const { id, title, category, content, relevance, imageUrl } = parsed.data;
 
     const timestampVal = new Date().toISOString().slice(0, 16).replace("T", " ");
     const recordId = id || `mem-${Date.now()}`;
@@ -664,12 +769,18 @@ app.post("/api/memories", async (req, res) => {
 });
 
 // Generate dynamic AI / procedural network visuals for memories (Imagen SDK integration)
-app.post("/api/generate-image", async (req, res) => {
+app.post("/api/generate-image", aiLimiter, async (req, res) => {
   try {
-    const { prompt } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ error: "Prompt is required to compile visual schematic matrix." });
+    const generateImageSchema = z.object({
+      prompt: z.string().min(1).max(500).trim()
+    });
+
+    const parsed = generateImageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid payload: Prompt is required and must not exceed 500 characters.", details: parsed.error.issues });
     }
+
+    const { prompt } = parsed.data;
 
     // Compile dynamic high-contrast procedural neural SVG schematics directly which load instantly and securely
     let hash = 0;
@@ -765,7 +876,12 @@ app.post("/api/generate-image", async (req, res) => {
 // Delete memory database record
 app.delete("/api/memories/:id", async (req, res) => {
   try {
-    const { id } = req.params;
+    const idParamSchema = z.string().max(250).regex(/^[\w\-]+$/);
+    const parsed = idParamSchema.safeParse(req.params.id);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid memory ID format." });
+    }
+    const id = parsed.data;
 
     if (pgPool) {
       const client = await pgPool.connect();
@@ -855,6 +971,492 @@ app.get("/api/chat/history", (req, res) => {
     return res.json({ messages: null });
   } catch (err: any) {
     return res.status(500).json({ error: "Failed to retrieve history backup: " + err.message });
+  }
+});
+
+// ==========================================
+// JARVIS X COGNITIVE BRAIN API ENDPOINTS
+// ==========================================
+
+// Global Mock Cognitive States for instantaneous, low-latency React interaction
+let cognitiveGoals = [
+  {
+    id: "g-01",
+    goal: "Deploy production-grade JARVIS X cognitive architecture",
+    progress: 75,
+    subtasks: [
+      { name: "Create backend cognition folder & files", done: true },
+      { name: "Scaffold 10 human-level skill matrix logs", done: true },
+      { name: "Establish Express API proxy routes", done: true },
+      { name: "Design stunning holographic interface tab", done: false }
+    ],
+    reward: "Master Intelligence Protocol Unlocked"
+  },
+  {
+    id: "g-02",
+    goal: "Acquire DeepMind system autonomous telemetry logs",
+    progress: 50,
+    subtasks: [
+      { name: "Calibrate micro-latencies across Express", done: true },
+      { name: "Complete self-evolution stress drills", done: false }
+    ],
+    reward: "Systemic Optimization Badge"
+  }
+];
+
+let cognitiveInterests: Record<string, number> = {
+  "AI Agents & Tool Use": 92,
+  "Fullstack Express Backends": 85,
+  "World Graph Ontologies": 70,
+  "Realtime Quantum Synthesizers": 60
+};
+
+let worldModelRelations = [
+  { subject: "Captain Rudra", predicate: "builds", object: "JARVIS X" },
+  { subject: "JARVIS X", predicate: "uses", object: "Node.js Express" },
+  { subject: "JARVIS X", predicate: "incorporates", object: "Supabase" },
+  { subject: "JARVIS X", predicate: "activates", object: "Cognitive Brain vNext" },
+  { subject: "Cognitive Brain vNext", predicate: "governs", object: "10 Human Skills" }
+];
+
+let recentEvaluatedFailures = [
+  { id: "fail-1", skill: "video", task: "Render 4K timeline clip without caching", reason: "Memory boundary reached during frame serialization" },
+  { id: "fail-2", skill: "coding", task: "Scaffold code block without pre-linting", reason: "TS compile phase suspended owing to syntax warnings" }
+];
+
+// Memory cache persistent store for JARVIS semantic caching simulator
+const cognitionSemanticCache: Array<{
+  query: string;
+  response: any;
+  created: number;
+}> = [];
+
+// Clean Jaccard word-level similarity scorer
+function getCognitiveSimilarity(str1: string, str2: string): number {
+  const w1 = str1.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+  const w2 = str2.toLowerCase().replace(/[^\w\s]/g, "").split(/\s+/).filter(w => w.length > 2);
+  if (w1.length === 0 || w2.length === 0) return 0;
+  
+  const s1 = new Set(w1);
+  const s2 = new Set(w2);
+  
+  const intersect = new Set([...s1].filter(x => s2.has(x)));
+  const union = new Set([...s1, ...s2]);
+  return intersect.size / union.size;
+}
+
+// 1. Process Complete Cognitive Pipeline with Semantic Cache (Inner Thought + Ethics + Common Sense + Prediction)
+app.post("/api/cognition/pipeline", aiLimiter, async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const pipelineSchema = z.object({
+      query: z.string().min(1).max(1000).trim(),
+      useCache: z.boolean().optional(),
+      simulateRawLatency: z.number().int().min(0).max(5000).optional()
+    });
+
+    const parsed = pipelineSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid payload formatting, or input length exceeded safety parameters.", details: parsed.error.issues });
+    }
+
+    const { query, useCache = true, simulateRawLatency = 800 } = parsed.data;
+
+    const qLower = query.toLowerCase();
+
+    // Check for semantic matches in our local redis-like cache store
+    if (useCache) {
+      let bestMatch: any = null;
+      let highestSim = 0;
+
+      for (const entry of cognitionSemanticCache) {
+        const sim = getCognitiveSimilarity(entry.query, query);
+        if (sim > highestSim) {
+          highestSim = sim;
+          bestMatch = entry;
+        }
+      }
+
+      // Threshold similarity > 0.6 matches semantically
+      if (highestSim >= 0.6 && bestMatch) {
+        const duration = Date.now() - startTime;
+        const savedTime = Math.max(0, simulateRawLatency - duration);
+        return res.json({
+          ...bestMatch.response,
+          telemetry: {
+            latencyMs: duration,
+            cacheStatus: "HIT",
+            similarityScore: Math.round(highestSim * 100) / 100,
+            matchedQuery: bestMatch.query,
+            latencySavedMs: savedTime,
+            cachedAt: new Date(bestMatch.created).toISOString(),
+            cacheSize: cognitionSemanticCache.length
+          }
+        });
+      }
+    }
+
+    // Direct path (Cache MISS or Bypassed) logic:
+    // Skill 9: Ethical Decision checks
+    let shouldExecute = true;
+    let riskEvaluation = "LOW";
+    let requiresApproval = false;
+    let ethicsReasoning = "This action lies within standard operating bounds.";
+
+    const dangerousIntents = ["delete database", "drop tables", "wipe memories", "shutdown firewall", "leak information", "overclock reactor past 150"];
+    for (const dangerous of dangerousIntents) {
+      if (qLower.includes(dangerous)) {
+        shouldExecute = false;
+        riskEvaluation = "CRITICAL";
+        requiresApproval = true;
+        ethicsReasoning = `Risk Flagged: Command requests extreme modification: '${dangerous}'. Critical system safeguarding triggered. Requires human overrule.`;
+        break;
+      }
+    }
+
+    if (qLower.includes("delete") || qLower.includes("wipe") || qLower.includes("purge")) {
+      riskEvaluation = "MEDIUM";
+      requiresApproval = true;
+      ethicsReasoning = "Memory pruning or registry purge requires explicit human user confirmation.";
+    }
+
+    // Safety override trigger
+    if (!shouldExecute) {
+      const duration = Date.now() - startTime;
+      return res.json({
+        success: false,
+        ethicsFlagged: true,
+        riskEvaluation,
+        requiresApproval,
+        reasoning: ethicsReasoning,
+        thoughtSpace: null,
+        telemetry: {
+          latencyMs: duration,
+          cacheStatus: "BYPASSED",
+          similarityScore: 0,
+          matchedQuery: null,
+          latencySavedMs: 0,
+          cacheSize: cognitionSemanticCache.length
+        }
+      });
+    }
+
+    // Skill 7: Inner Thought Space (Thoughts listing + reasoning action steps synthesis)
+    const thoughts = [
+      `Deconstructing message: "${query}"`,
+      "Deconvoluting structural parameters and active environment indicators.",
+      "Syncing with offline IndexedDB chat buffers and PostgreSQL tables."
+    ];
+
+    let tacticalPlan = [
+      "1. Inspect systemic states in active diagnostic dashboard",
+      "2. Retrieve highest-ranked memory indices from storage core",
+      "3. Conduct real-time Google search grounding if required"
+    ];
+
+    if (qLower.includes("code") || qLower.includes("build") || qLower.includes("compile") || qLower.includes("programmer")) {
+      thoughts.push("Coding interest matched. Must consult 'coding' skill specifications.");
+      tacticalPlan = [
+        "1. Write compliant typescript file structures",
+        "2. Run compile_applet and check for syntax warnings",
+        "3. Provide final polished overview to user without tech-larping logs"
+      ];
+    } else if (qLower.includes("search") || qLower.includes("ground") || qLower.includes("research")) {
+      thoughts.push("Research focus matched. Grounding search queries dynamically.");
+      tacticalPlan = [
+        "1. Execute search queries against web indexing APIs",
+        "2. Parse, re-rank, and filter citations cleanly",
+        "3. Format responsive report detailing findings in Markdown"
+      ];
+    } else if (qLower.includes("video") || qLower.includes("render") || qLower.includes("movie")) {
+      thoughts.push("Media rendering task detected. CPU/GPU thresholds must be pre-screened.");
+      tacticalPlan = [
+        "1. Import raw assets and lay timeline tracks",
+        "2. Inject caption overlays and text nodes",
+        "3. Export high-fidelity .mp4 file to system directories"
+      ];
+    }
+
+    // Skill 1: Common Sense facts matching
+    const commonSenseFacts: Record<string, string> = {
+      "exam": "requires preparation and sharp focus",
+      "school": "contains classrooms, mentors, and learning matrices",
+      "email": "has a sender, a recipient, and an intent header",
+      "water": "is fluid, wet, and crucial for human metabolic operations",
+      "night": "comes after evening and is suitable for rejuvenation",
+      "coffee": "triggers cellular adrenaline and focus boosts via caffeine molecules"
+    };
+
+    let matchedFact = "Heuristics verified: Actions coordinate with standard physical relationships.";
+    for (const [key, val] of Object.entries(commonSenseFacts)) {
+      if (qLower.includes(key)) {
+        matchedFact = `Fact verified: ${key.toUpperCase()} -> ${val}.`;
+        break;
+      }
+    }
+
+    // Skill 5: World Model associations query
+    const relatedWorldModelRelations: string[] = [];
+    worldModelRelations.forEach(rel => {
+      if (qLower.includes(rel.subject.toLowerCase()) || qLower.includes(rel.object.toLowerCase())) {
+        relatedWorldModelRelations.push(`${rel.subject} --(${rel.predicate})--> ${rel.object}`);
+      }
+    });
+    if (relatedWorldModelRelations.length === 0) {
+      relatedWorldModelRelations.push("JARVIS X --(governs)--> Cognitive Brain vNext");
+    }
+
+    // Skill 6: Prediction Engine parameters forecasting
+    const currentHour = new Date().getUTCHours();
+    const isEvening = currentHour >= 12 || currentHour <= 2; // 12 PM - 2 AM UTC or similar
+    const predictedActiveWindow = isEvening ? "07:00 PM - 09:00 PM (19:00 - 21:00)" : "08:00 AM - 11:00 AM (08:00 - 11:00)";
+    const userEnergyVibe = isEvening ? "High Mental Study & Coding Sessions" : "Administrative Emails and Notifications Review";
+    const autonomousTask = isEvening ? "Pre-compile code directories and cache templates" : "Summarize outstanding support requests";
+
+    const baseResponse = {
+      success: true,
+      ethicsFlagged: false,
+      riskEvaluation,
+      requiresApproval,
+      reasoning: ethicsReasoning,
+      thoughtSpace: {
+        thoughts,
+        tacticalPlan
+      },
+      commonSense: {
+        matchedFact
+      },
+      worldModel: {
+        relations: relatedWorldModelRelations
+      },
+      prediction: {
+        window: predictedActiveWindow,
+        energy: userEnergyVibe,
+        autonomousTask,
+        confidence: "95%"
+      }
+    };
+
+    // Simulate heavy network / LLM inference latency if required
+    if (simulateRawLatency > 0) {
+      const waitTime = Math.max(0, simulateRawLatency - (Date.now() - startTime));
+      if (waitTime > 0) {
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+    }
+
+    // Cache the output for future semantically matching queries
+    cognitionSemanticCache.push({
+      query,
+      response: baseResponse,
+      created: Date.now()
+    });
+
+    const elapsed = Date.now() - startTime;
+
+    return res.json({
+      ...baseResponse,
+      telemetry: {
+        latencyMs: elapsed,
+        cacheStatus: useCache ? "MISS" : "BYPASSED",
+        similarityScore: 1.0,
+        matchedQuery: null,
+        latencySavedMs: 0,
+        cacheSize: cognitionSemanticCache.length
+      }
+    });
+
+  } catch (err: any) {
+    res.status(500).json({ error: "Critical Cognitive Pipeline Overload: " + err.message });
+  }
+});
+
+// 2. Goal Motivation endpoints (Skill 4)
+app.get("/api/cognition/goals", (req, res) => {
+  res.json(cognitiveGoals);
+});
+
+app.post("/api/cognition/goals", (req, res) => {
+  try {
+    const { goal, reward } = req.body;
+    if (!goal) {
+      return res.status(400).json({ error: "Goal statement is required." });
+    }
+    const newG = {
+      id: `g-${Date.now()}`,
+      goal,
+      progress: 0,
+      subtasks: [
+        { name: "Deconstruct goal objectives", done: true },
+        { name: "Enact cognitive thinking steps", done: false },
+        { name: "Compile physical validations", done: false }
+      ],
+      reward: reward || "Cosmic Knowledge Badge Unlocked"
+    };
+    cognitiveGoals.unshift(newG);
+    res.json({ success: true, item: newG });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/cognition/goals/toggle-subtask", (req, res) => {
+  try {
+    const { goalId, subtaskName, done } = req.body;
+    const g = cognitiveGoals.find(item => item.id === goalId);
+    if (!g) {
+      return res.status(404).json({ error: "Goal index not found." });
+    }
+    const sub = g.subtasks.find(s => s.name === subtaskName);
+    if (sub) {
+      sub.done = done;
+    }
+    // Re-tally progress
+    const completed = g.subtasks.filter(s => s.done).length;
+    g.progress = Math.round((completed / g.subtasks.length) * 100);
+    res.json({ success: true, item: g });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Curiosity Engine endpoints (Skill 3)
+app.get("/api/cognition/interests", (req, res) => {
+  res.json(cognitiveInterests);
+});
+
+app.post("/api/cognition/interests", (req, res) => {
+  try {
+    const { topic, val } = req.body;
+    if (!topic) return res.status(400).json({ error: "Topic required" });
+    cognitiveInterests[topic] = Math.min(100, Math.max(0, val));
+    res.json({ success: true, interests: cognitiveInterests });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. World Model Relation learn endpoint (Skill 5)
+app.get("/api/cognition/relations", (req, res) => {
+  res.json(worldModelRelations);
+});
+
+app.post("/api/cognition/relations", (req, res) => {
+  try {
+    const { subject, predicate, object } = req.body;
+    if (!subject || !predicate || !object) {
+      return res.status(400).json({ error: "Subject, predicate, and object terms are all required." });
+    }
+    worldModelRelations.unshift({ subject, predicate, object });
+    res.json({ success: true, relations: worldModelRelations });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Creativity Layer concept merge endpoint (Skill 8)
+app.post("/api/cognition/creativity", (req, res) => {
+  try {
+    const { ideaA, ideaB } = req.body;
+    if (!ideaA || !ideaB) {
+      return res.status(400).json({ error: "Provide two concepts to ignite creativity synthesis." });
+    }
+
+    const aLower = ideaA.toLowerCase();
+    const bLower = ideaB.toLowerCase();
+
+    let name = `${ideaA.trim()}-${ideaB.trim()} Blend`;
+    let vision = `A futuristic fusion leveraging both ${ideaA} and ${ideaB} properties.`;
+    let cases = [
+      "Improve system speed values by caching results",
+      "Provide custom responsive layouts to users"
+    ];
+
+    if (aLower.includes("ai") || bLower.includes("ai")) {
+      if (aLower.includes("study") || bLower.includes("study") || aLower.includes("planner") || bLower.includes("planner")) {
+        name = "StudyFlow AI";
+        vision = "An autonomous neural study scheduler mapping human concentration curves, optimizing calendar intervals around energy peaks.";
+        cases = [
+          "Dynamic review intervals pacing based on upcoming tests deadlines",
+          "Automatic micro-rewards allocation based on productivity completions"
+        ];
+      } else if (aLower.includes("voice") || bLower.includes("voice") || aLower.includes("audio") || bLower.includes("audio")) {
+        name = "AeroVoice AI";
+        vision = "A cognitive microphone layer listening silently to room acoustics, triggering actions seamlessly with zero touch.";
+        cases = [
+          "Secure zero-g home automation systems",
+          "Automated micro-feedback and notifications reading"
+        ];
+      }
+    }
+
+    res.json({
+      success: true,
+      ideaA,
+      ideaB,
+      synthesizedName: name,
+      vision,
+      useCases: cases
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Reflection Lessons query endpoint (Skill 2)
+app.get("/api/cognition/reflection", (req, res) => {
+  const { day } = req.query;
+  const dayStr = (day as string) || "Today";
+  const dayLower = dayStr.toLowerCase();
+
+  let lessons = [
+    `Maintain system background logs below 80% to maintain clean pipelines on ${dayStr}.`,
+    `Calibrate semantic dialogue systems early before heavy user queries on ${dayStr}.`
+  ];
+
+  if (dayLower.includes("mon") || dayLower.includes("monday")) {
+    lessons = [
+      "Overclocking core registers without memory decay triggers quick CPU warnings; sweep early.",
+      "Captain Rudra's study sessions peak between 7 PM - 9 PM. Pre-activate focus panels."
+    ];
+  } else if (dayLower.includes("tue") || dayLower.includes("tuesday")) {
+    lessons = [
+      "Autonomous automated loops execute faster when webhook data is cached locally first.",
+      "IndexedDB chat structures are highly stable against accidental tab closes or drops."
+    ];
+  }
+
+  res.json({
+    day: dayStr,
+    lessons
+  });
+});
+
+// 7. Self Evolution / Auditing action simulations (Skill 10)
+app.post("/api/cognition/self-evolution", (req, res) => {
+  try {
+    const healedCount = recentEvaluatedFailures.length;
+    const strategies: string[] = [];
+
+    recentEvaluatedFailures.forEach(fail => {
+      if (fail.reason.includes("Memory")) {
+        strategies.push(`Healed [${fail.skill.toUpperCase()}]: Integrated garbage recycle loops to flush frames instantly.`);
+      } else if (fail.reason.includes("compile") || fail.reason.includes("warnings")) {
+        strategies.push(`Healed [${fail.skill.toUpperCase()}]: Triggered TypeScript check warnings pre-screener.`);
+      }
+    });
+
+    // Clear local cache
+    recentEvaluatedFailures = [];
+
+    res.json({
+      success: true,
+      healedCount,
+      strategies: strategies.length > 0 ? strategies : ["Self-healing scan complete. All operating threads align to 100% metrics."],
+      reliabilityDelta: healedCount > 0 ? "+4% core reliability" : "+1%"
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
