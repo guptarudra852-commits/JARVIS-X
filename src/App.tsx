@@ -70,6 +70,7 @@ import LoginSignup from "./components/pages/LoginSignup";
 import Contact from "./components/pages/Contact";
 import Settings from "./components/pages/Settings";
 import Cognition from "./components/pages/Cognition";
+import ComputerControl from "./components/pages/ComputerControl";
 
 export interface ReferenceModel {
   id: string;
@@ -499,6 +500,7 @@ export default function App() {
     { id: "automation", label: "Routine Pipelines", iconName: "automation", category: "operating" },
     { id: "analytics", label: "Performance Intel", iconName: "analytics", category: "operating" },
     { id: "integrations", label: "Platform Hooks", iconName: "integrations", category: "operating" },
+    { id: "vaultshield", label: "Computer Gateway", iconName: "vaultshield", category: "operating" },
 
     { id: "pricing", label: "System Pricing", iconName: "pricing", category: "services" },
     { id: "documentation", label: "API Reference", iconName: "documentation", category: "services" },
@@ -532,6 +534,7 @@ export default function App() {
       case "signup": return <CircleUser size={15} className={classProps} />;
       case "contact": return <Mail size={15} className={classProps} />;
       case "settings": return <Sliders size={15} className={classProps} />;
+      case "vaultshield": return <Shield size={15} className={classProps} />;
       default: return <Compass size={15} className={classProps} />;
     }
   };
@@ -562,6 +565,7 @@ export default function App() {
     { title: "Engage Matrix Green Accent Theme", subtitle: "Set accent to cyberpunk digital green", action: () => handleThemeShift("matrix-green"), tags: ["accent", "skin", "dark"] },
     { title: "Engage White Holographic Accent Theme", subtitle: "Set accent to stark clean white UI", action: () => handleThemeShift("white-holo"), tags: ["accent", "skin", "dark"] },
     { title: "Open Platforms Integrations", subtitle: "Check connected API keys & web servers", action: () => handleNavigate("integrations"), tags: ["services", "webhook", "discord"] },
+    { title: "Open Computer Gateway Layer", subtitle: "Controlled sandbox and permission layer separating logical core", action: () => handleNavigate("vaultshield"), tags: ["agent", "os", "click", "permissions", "safeguard", "sandbox"] },
     { title: "Open Routine Pipelines", subtitle: "Setup trigger-and-action automated tasks", action: () => handleNavigate("automation"), tags: ["agent", "loops", "jobs"] },
     { title: "Open Performance Intel Analytics", subtitle: "Inspect historic core responsiveness speeds", action: () => handleNavigate("analytics"), tags: ["speeds", "charts", "metrics"] },
     { title: "Toggle Synthesized Audio Bleeps", subtitle: "Turn hover audio system ON/OFF", action: () => { setSoundEnabled(prev => { const n = !prev; addTerminalLog("INFO", `Holographic buzzer: ${n ? "ONLINE" : "MUTED"}`); return n; }); }, tags: ["synthesizer", "mute", "sound"] },
@@ -1300,6 +1304,7 @@ export default function App() {
                     {activePage === "signup" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />}
                     {activePage === "contact" && <Contact onLogMessage={addTerminalLog} />}
                     {activePage === "settings" && <Settings onLogMessage={addTerminalLog} />}
+                    {activePage === "vaultshield" && <ComputerControl onLogMessage={addTerminalLog} />}
                   </div>
                 )}
               </motion.div>
@@ -1846,6 +1851,7 @@ export default function App() {
                 {activePage === "signup" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />}
                 {activePage === "contact" && <Contact onLogMessage={addTerminalLog} />}
                 {activePage === "settings" && <Settings onLogMessage={addTerminalLog} />}
+                {activePage === "vaultshield" && <ComputerControl onLogMessage={addTerminalLog} />}
               </motion.div>
             </AnimatePresence>
           </div>

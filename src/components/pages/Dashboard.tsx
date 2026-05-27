@@ -30,7 +30,12 @@ import {
   CloudLightning,
   Workflow,
   MousePointerClick,
-  Terminal
+  Terminal,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  Lock,
+  Unlock
 } from "lucide-react";
 
 interface SystemProcess {
@@ -50,6 +55,14 @@ interface TaskPipelineItem {
   progress: number;
 }
 
+export interface SecurityIncident {
+  id: string;
+  timestamp: string;
+  type: "CRITICAL" | "WARNING" | "INFO";
+  message: string;
+  source: string;
+}
+
 export default function Dashboard() {
   const [cpuLoad, setCpuLoad] = useState(45);
   const [memoryLoad, setMemoryLoad] = useState(62);
@@ -59,6 +72,16 @@ export default function Dashboard() {
   const [selectedWidgetCategory, setSelectedWidgetCategory] = useState<string>("all");
   const [isCoreProcessing, setIsCoreProcessing] = useState(false);
   const [dragEnabled, setDragEnabled] = useState(true);
+
+  // Security logs states
+  const [securityIncidents, setSecurityIncidents] = useState<SecurityIncident[]>([
+    { id: "sec-1", timestamp: "10:14:02", type: "CRITICAL", message: "Flagged replay hack attempt with revoked refresh token key.", source: "192.168.12.98" },
+    { id: "sec-2", timestamp: "10:11:15", type: "WARNING", message: "Threshold breach: 12 rapid synapse queries from unregistered agent endpoint.", source: "10.0.4.52" },
+    { id: "sec-3", timestamp: "10:08:44", type: "INFO", message: "Intrusion protection system definitions synchronized (v5.4.1).", source: "Mainframe" },
+  ]);
+  const [threatLevel, setThreatLevel] = useState<"STEADY" | "ELEVATED" | "CRITICAL">("ELEVATED");
+  const [ipsActive, setIpsActive] = useState(true);
+  const [activeBlocks, setActiveBlocks] = useState(14);
 
   // Processes state
   const [processes, setProcesses] = useState<SystemProcess[]>([
@@ -132,6 +155,94 @@ export default function Dashboard() {
 
     return () => clearInterval(interval);
   }, [isHyperDrive]);
+
+  // Real-time security incident generator
+  useEffect(() => {
+    const generatorInterval = setInterval(() => {
+      if (!ipsActive) return;
+
+      const sources = ["192.168.1.104", "10.0.0.8", "45.130.22.11", "203.0.113.14", "172.16.254.1", "Web-Gateway", "BullMQ-Pool"];
+      const messages = [
+        { msg: "Bruteforce attempt blocked: failed SSH authentication on node delta-4.", type: "WARNING" },
+        { msg: "API rate limit throttled on unregistered agent webhook request.", type: "INFO" },
+        { msg: "SQL injection threat structural pattern detected in query body.", type: "CRITICAL" },
+        { msg: "Credential replay reuse flagged in authorization token rotator.", type: "CRITICAL" },
+        { msg: "S.H.I.E.L.D system sensor network reported out of bounds response headers.", type: "WARNING" },
+        { msg: "Automated vulnerability crawler identified and blacklisted instantly.", type: "INFO" },
+        { msg: "Mainframe kernel socket experienced transient connection reset.", type: "WARNING" }
+      ];
+
+      const chosen = messages[Math.floor(Math.random() * messages.length)];
+      const chosenSrc = sources[Math.floor(Math.random() * sources.length)];
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+
+      const newLog: SecurityIncident = {
+        id: `sec-${Date.now()}`,
+        timestamp: timeStr,
+        type: chosen.type as any,
+        message: chosen.msg,
+        source: chosenSrc
+      };
+
+      setSecurityIncidents(prev => [newLog, ...prev.slice(0, 19)]);
+
+      if (chosen.type === "CRITICAL" || chosen.type === "WARNING") {
+        setActiveBlocks(prev => prev + 1);
+      }
+
+      if (chosen.type === "CRITICAL") {
+        setThreatLevel("CRITICAL");
+        setTimeout(() => {
+          setThreatLevel(prev => prev === "CRITICAL" ? "ELEVATED" : prev);
+        }, 5000);
+      }
+    }, 12000); // simulated event every 12 seconds
+
+    return () => clearInterval(generatorInterval);
+  }, [ipsActive]);
+
+  const triggerManualIncident = (type: "CRITICAL" | "WARNING" | "INFO") => {
+    const messages = {
+      CRITICAL: "CRITICAL: Detected buffer overflow trace in central semantic vector parsing stack.",
+      WARNING: "WARNING: High threshold packet latency on web server root gateway.",
+      INFO: "INFO: System security database snapshot backup generated successfully."
+    };
+    const sources = {
+      CRITICAL: "Malicious-Client [45.89.2.100]",
+      WARNING: "Gateway-Router [10.0.1.1]",
+      INFO: "Local-Backup-Scheduler"
+    };
+
+    const now = new Date();
+    const timeStr = now.toTimeString().split(' ')[0];
+
+    const newLog: SecurityIncident = {
+      id: `sec-man-${Date.now()}`,
+      timestamp: timeStr,
+      type: type,
+      message: messages[type],
+      source: sources[type]
+    };
+
+    setSecurityIncidents(prev => [newLog, ...prev]);
+    
+    let mappedLevel: "STEADY" | "ELEVATED" | "CRITICAL" = "STEADY";
+    if (type === "CRITICAL") mappedLevel = "CRITICAL";
+    else if (type === "WARNING") mappedLevel = "ELEVATED";
+    
+    setThreatLevel(mappedLevel);
+
+    if (type === "CRITICAL" || type === "WARNING") {
+      setActiveBlocks(prev => prev + 1);
+    }
+
+    if (type === "CRITICAL") {
+      setTimeout(() => {
+        setThreatLevel(prev => prev === "CRITICAL" ? "ELEVATED" : prev);
+      }, 5000);
+    }
+  };
 
   // Main task process runner
   const triggerCoreTaskLoop = () => {
@@ -585,7 +696,7 @@ export default function Dashboard() {
       </div>
 
       {/* 4. LOWER SECONDARY SPATIAL MATRIX CONTROLS WRITING BOARD */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
         
         {/* Goals / Checklist board */}
         <motion.div
@@ -703,6 +814,146 @@ export default function Dashboard() {
 
           <div className="text-[7px] font-mono text-slate-500">
             SECURE LOG INDEXER
+          </div>
+        </motion.div>
+
+        {/* Security Logs Widget */}
+        <motion.div
+          drag={dragEnabled}
+          dragConstraints={{ left: -5, right: 5, top: -5, bottom: 5 }}
+          dragElastic={0.01}
+          className={`p-5 border bg-black/40 rounded-xl backdrop-blur-md flex flex-col justify-between transition-all duration-500 relative overflow-hidden ${
+            threatLevel === "CRITICAL" 
+              ? "border-red-500/50 shadow-[0_0_20px_rgba(239,68,68,0.2)]" 
+              : threatLevel === "ELEVATED"
+              ? "border-amber-500/40 animate-pulse"
+              : "border-white/10"
+          }`}
+        >
+          <div className="space-y-3.5 flex-1 flex flex-col justify-between">
+            {/* Header / State Row */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono font-bold tracking-widest text-red-400 flex items-center gap-2">
+                <ShieldAlert size={13} className={threatLevel === "CRITICAL" ? "animate-bounce text-red-500" : ""} />
+                <span>SECURITY MONITOR</span>
+              </span>
+              
+              <div className="flex items-center gap-2">
+                <span className={`inline-block w-2 h-2 rounded-full ${
+                  ipsActive ? "bg-emerald-400 animate-ping" : "bg-red-400"
+                }`} />
+                <button
+                  type="button"
+                  onClick={() => setIpsActive(!ipsActive)}
+                  className={`p-1 rounded cursor-pointer transition-colors border ${
+                    ipsActive 
+                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" 
+                      : "bg-red-500/10 border-red-500/30 text-red-400"
+                  }`}
+                  title={ipsActive ? "Pause active IPS system scan" : "Activate threat prevention shield"}
+                >
+                  {ipsActive ? <Lock size={10} /> : <Unlock size={10} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Sub telemetry header with Threat Status & Active blocks */}
+            <div className="grid grid-cols-2 gap-2 bg-zinc-950/40 p-2 border border-white/5 rounded-lg text-center font-mono">
+              <div className="border-r border-white/5">
+                <span className="block text-[7px] text-zinc-500 uppercase">SYS RISK THREAT</span>
+                <span className={`text-[9px] font-black tracking-wider uppercase ${
+                  threatLevel === "CRITICAL" 
+                    ? "text-red-500 animate-pulse" 
+                    : threatLevel === "ELEVATED"
+                    ? "text-amber-500"
+                    : "text-emerald-400"
+                }`}>
+                  {threatLevel}
+                </span>
+              </div>
+              <div>
+                <span className="block text-[7px] text-zinc-500 uppercase">THREATS BLOCKED</span>
+                <span className="text-[10px] font-bold text-slate-300">
+                  {activeBlocks}
+                </span>
+              </div>
+            </div>
+
+            {/* Live Scrolling Logs */}
+            <div className="h-28 overflow-y-auto pr-0.5 space-y-1 bg-zinc-950/70 border border-white/10 p-2 font-mono text-[8px] rounded-lg scrollbar-thin max-h-[120px] select-text">
+              {securityIncidents.map((incident) => {
+                let badgeColor = "bg-sky-500/10 text-sky-400 border-sky-500/20";
+                if (incident.type === "CRITICAL") badgeColor = "bg-red-500/20 text-red-400 border-red-500/30 animate-pulse";
+                if (incident.type === "WARNING") badgeColor = "bg-amber-500/20 text-amber-400 border-amber-500/30";
+
+                return (
+                  <motion.div
+                    key={incident.id}
+                    initial={{ opacity: 0, x: -5 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className={`p-1.5 border rounded flex flex-col gap-1 transition-colors ${
+                      incident.type === "CRITICAL" 
+                        ? "bg-red-950/20 border-red-500/30" 
+                        : "bg-slate-900/30 border-white/5"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1">
+                        <span className="text-slate-500">{incident.timestamp}</span>
+                        <span className={`px-1 rounded border text-[6px] font-bold ${badgeColor}`}>
+                          {incident.type}
+                        </span>
+                      </div>
+                      <span className="text-zinc-500 truncate max-w-[80px]">IP: {incident.source}</span>
+                    </div>
+                    <p className="text-slate-300 leading-snug break-all font-sans text-[8.5px] font-medium">
+                      {incident.message}
+                    </p>
+                  </motion.div>
+                );
+              })}
+            </div>
+
+            {/* Simulated Live Action Panel */}
+            <div className="space-y-1.5 pt-1 border-t border-white/5">
+              <span className="text-[7.5px] font-mono text-zinc-500 block uppercase">SIMULATE EXPLOIT ATTACK VECTORS</span>
+              <div className="grid grid-cols-3 gap-1">
+                <button
+                  type="button"
+                  onClick={() => triggerManualIncident("CRITICAL")}
+                  className="px-1 py-1 font-mono text-[7px] font-bold border border-red-500/30 text-red-400 hover:bg-red-500/15 rounded bg-red-500/5 transition-all text-center uppercase cursor-pointer truncate animate-none"
+                  title="Simulate buffer overflow"
+                >
+                  BruteForce
+                </button>
+                <button
+                  type="button"
+                  onClick={() => triggerManualIncident("WARNING")}
+                  className="px-1 py-1 font-mono text-[7px] font-bold border border-amber-500/30 text-amber-400 hover:bg-amber-500/15 rounded bg-amber-500/5 transition-all text-center uppercase cursor-pointer truncate animate-none"
+                  title="Simulate gateway route probe"
+                >
+                  Probe Scan
+                </button>
+                <button
+                  type="button"
+                  onClick={() => triggerManualIncident("INFO")}
+                  className="px-1 py-1 font-mono text-[7px] font-bold border border-sky-500/30 text-sky-400 hover:bg-sky-500/15 rounded bg-sky-500/5 transition-all text-center uppercase cursor-pointer truncate animate-none"
+                  title="Simulate system backup scheduler"
+                >
+                  Backup Sync
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-[7px] font-mono text-slate-500 mt-2 flex justify-between items-center">
+            <span>ACTIVE PROTECTION V5</span>
+            <button
+              onClick={() => setSecurityIncidents([])}
+              className="text-red-400 hover:text-red-300 font-bold uppercase transition-all text-[6.5px]"
+            >
+              Clear Feed
+            </button>
           </div>
         </motion.div>
 

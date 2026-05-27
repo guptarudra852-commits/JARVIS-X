@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2 } from "lucide-react";
+import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2, LayoutGrid, Server } from "lucide-react";
+import * as ReactWindow from "react-window";
 import { MemoryCard } from "../../types";
+
+const List = (ReactWindow as any).FixedSizeList || (ReactWindow as any).default?.FixedSizeList;
 
 interface MemoryProps {
   onLogMessage: (level: "INFO" | "WARN" | "CORE" | "ERROR", text: string) => void;
@@ -11,6 +14,7 @@ export default function Memory({ onLogMessage }: MemoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
   const [sortBy, setSortBy] = useState<"relevance" | "date">("relevance");
+  const [viewMode, setViewMode] = useState<"grid" | "virtual">("grid");
   const [memories, setMemories] = useState<MemoryCard[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -246,20 +250,49 @@ export default function Memory({ onLogMessage }: MemoryProps) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto text-xs py-1 whitespace-nowrap justify-center sm:justify-start">
-          {["all", "preference", "task", "system", "personal"].map((cat) => (
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto overflow-x-auto py-1 justify-center sm:justify-start">
+          <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap">
+            {["all", "preference", "task", "system", "personal"].map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setFilterCategory(cat)}
+                className={`px-2.5 py-1 border rounded font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer ${
+                  filterCategory === cat
+                    ? "border-cyan-400 bg-cyan-500/10 text-cyan-300 font-bold"
+                    : "border-white/5 hover:border-cyan-500/20 text-gray-400"
+                }`}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          <div className="h-4 w-[1px] bg-cyan-500/10 hidden sm:block shrink-0"></div>
+
+          <div className="flex items-center gap-1 bg-cyan-950/20 border border-cyan-500/10 p-0.5 rounded-lg shrink-0">
             <button
-              key={cat}
-              onClick={() => setFilterCategory(cat)}
-              className={`px-3 py-1 border rounded font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer ${
-                filterCategory === cat
-                  ? "border-cyan-400 bg-cyan-500/10 text-cyan-300 font-bold"
-                  : "border-white/5 hover:border-cyan-500/20 text-gray-400"
-              }`}
+              type="button"
+              onClick={() => {
+                setViewMode("grid");
+                onLogMessage("INFO", "Shifted synapse memory matrix visualization to Multi-column Holographic Grid.");
+              }}
+              className={`p-1 rounded cursor-pointer transition-all ${viewMode === "grid" ? "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30" : "text-gray-400 hover:text-cyan-400 border border-transparent"}`}
+              title="Holographic Grid Grid View"
             >
-              {cat}
+              <LayoutGrid size={11} />
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("virtual");
+                onLogMessage("CORE", "Activated core High-Performance Virtualized List Engine [react-window: 60 FPS].");
+              }}
+              className={`p-1 rounded cursor-pointer transition-all ${viewMode === "virtual" ? "bg-cyan-500/15 text-cyan-300 border border-cyan-500/30" : "text-gray-400 hover:text-cyan-400 border border-transparent"}`}
+              title="Virtualized List View"
+            >
+              <Server size={11} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -368,10 +401,107 @@ export default function Memory({ onLogMessage }: MemoryProps) {
         </form>
       )}
 
-      {/* LIST MEMORIES CARD GRID */}
+      {/* LIST MEMORIES CARD GRID OR VIRTUAL LIST */}
       {loading ? (
         <div className="text-center py-12 border border-cyan-500/10 rounded-xl font-mono text-xs text-cyan-400 animate-pulse uppercase">
           [Connecting Neural Channel] Querying Synapse Archive Matrices...
+        </div>
+      ) : viewMode === "virtual" ? (
+        <div className="border border-cyan-500/15 bg-black/40 rounded-xl p-4 backdrop-blur-md">
+          <div className="flex items-center justify-between border-b border-cyan-500/10 pb-3 mb-3 font-mono text-[9px] text-cyan-400/40 uppercase tracking-widest px-2">
+            <span>SYNAPSE RECORD NAME & DETAILS</span>
+            <span className="hidden md:inline">INDEXED TIMESTAMP & RELEVANCE</span>
+          </div>
+
+          <List
+            height={400}
+            itemCount={sortedMemories.length}
+            itemSize={56}
+            width="100%"
+          >
+            {({ index, style }) => {
+              const mem = sortedMemories[index];
+              if (!mem) return null;
+              
+              const isEditing = isEditingId === mem.id;
+
+              return (
+                <div style={style} className="py-1 px-1">
+                  {isEditing ? (
+                    <div className="flex items-center gap-2 bg-cyan-950/40 border border-cyan-400/40 rounded-lg p-1.5 h-full">
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        className="flex-1 min-w-[100px] bg-black/60 border border-cyan-500/30 rounded px-2 py-0.5 text-[10px] text-white font-mono font-semibold focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="flex-2 min-w-[160px] bg-black/60 border border-cyan-500/30 rounded px-2 py-0.5 text-[10px] text-gray-300 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveEdit(mem.id)}
+                        className="px-2 py-1 bg-cyan-500 text-black font-semibold text-[9px] font-mono rounded cursor-pointer shrink-0"
+                      >
+                        SAVE
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingId(null)}
+                        className="px-2 py-1 border border-white/15 text-gray-400 text-[9px] font-mono rounded cursor-pointer shrink-0"
+                      >
+                        ABORT
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between h-full bg-black/45 hover:bg-cyan-950/15 border border-cyan-500/10 hover:border-cyan-400/30 rounded-lg px-3 transition-all group relative overflow-hidden">
+                      <div className="flex items-center gap-3 truncate mr-8">
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0 shadow-[0_0_8px_rgba(6,182,212,0.8)]"></span>
+                        <div className="truncate">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-[10px] font-bold text-white uppercase truncate tracking-wider">{mem.title}</span>
+                            <span className="text-[7.5px] font-mono text-cyan-400 border border-cyan-500/20 bg-cyan-950/25 px-1 rounded uppercase shrink-0 leading-none py-0.5">{mem.category}</span>
+                          </div>
+                          <p className="text-[10px] text-gray-400 truncate mt-0.5 font-sans font-light">{mem.content}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 shrink-0 font-mono text-[9px]">
+                        <span className="text-gray-500 hidden sm:inline uppercase">INDEXED: {mem.timestamp}</span>
+                        <span className="text-cyan-400 font-bold bg-cyan-500/5 border border-cyan-500/10 px-1.5 py-0.5 rounded shadow-[0_0_8px_rgba(6,182,212,0.05)]">RELEVANCE: {mem.relevance}%</span>
+                      </div>
+
+                      {/* virtual list quick actions trigger */}
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-black border border-cyan-500/20 rounded shadow-lg p-0.5">
+                        <button
+                          onClick={() => startEdit(mem)}
+                          className="p-1 text-cyan-400 hover:text-cyan-300 transition-all cursor-pointer"
+                          title="Edit Synapse"
+                        >
+                          <Edit3 size={10} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(mem.id)}
+                          className="p-1 text-gray-400 hover:text-red-400 transition-all cursor-pointer"
+                          title="Prune Synapse"
+                        >
+                          <Trash2 size={10} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }}
+          </List>
+
+          {sortedMemories.length === 0 && (
+            <div className="text-center py-8 font-mono text-xs text-gray-500 uppercase">
+              NO CORRESPONDING SYNAPSES MAPPED IN ACTIVE CONTEXT
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

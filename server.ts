@@ -1460,6 +1460,540 @@ app.post("/api/cognition/self-evolution", (req, res) => {
   }
 });
 
+// ==========================================
+// ADVANCED COGNITIVE DEVELOPMENT LAB API ENDPOINTS
+// ==========================================
+
+export interface AgentInfo {
+  name: string;
+  endpoint: string;
+  version: string;
+  registeredAt: string;
+  status: "ACTIVE" | "IDLE" | "ERROR";
+}
+
+// Memory stores for emulated services
+const registeredAgents: AgentInfo[] = [
+  { name: "S.H.I.E.L.D. Monitor AI", endpoint: "http://localhost:4001/api/v1", version: "2.4.1", registeredAt: new Date(Date.now() - 3600000).toISOString(), status: "ACTIVE" },
+  { name: "Veridian Oracle Hook", endpoint: "http://localhost:4002/webhook", version: "1.0.8", registeredAt: new Date(Date.now() - 1800000).toISOString(), status: "IDLE" }
+];
+
+interface RefreshTokenStore {
+  token: string;
+  userId: string;
+  expiresAt: number;
+  revoked: boolean;
+}
+
+let activeRefreshTokens: RefreshTokenStore[] = [
+  { token: "initial-ref-token-xyz-123456", userId: "user-rudra-852", expiresAt: Date.now() + 7 * 24 * 3600 * 1000, revoked: false }
+];
+
+interface QueueJob {
+  id: string;
+  prompt: string;
+  status: "queued" | "active" | "completed";
+  progress: number;
+  result?: string;
+  addedAt: string;
+}
+
+let asyncTaskQueue: QueueJob[] = [];
+
+// 1. Agent self-register endpoint
+app.post("/api/agents/register", (req, res) => {
+  try {
+    const registerSchema = z.object({
+      name: z.string().min(1).max(100).trim(),
+      endpoint: z.string().url().max(500),
+      version: z.string().min(1).max(20).trim()
+    });
+
+    const parsed = registerSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid agent registry configuration parameters.", details: parsed.error.issues });
+    }
+
+    const { name, endpoint, version } = parsed.data;
+
+    // Check if duplicate already exists
+    const existingIdx = registeredAgents.findIndex(a => a.endpoint === endpoint);
+    const newAgent: AgentInfo = {
+      name,
+      endpoint,
+      version,
+      registeredAt: new Date().toISOString(),
+      status: "ACTIVE"
+    };
+
+    if (existingIdx !== -1) {
+      registeredAgents[existingIdx] = newAgent;
+    } else {
+      registeredAgents.push(newAgent);
+    }
+
+    res.status(201).json({ status: "registered", agent: newAgent });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List all registered agents
+app.get("/api/agents", (req, res) => {
+  res.json(registeredAgents);
+});
+
+// Clear registered agent simulations
+app.post("/api/agents/clear", (req, res) => {
+  registeredAgents.length = 0;
+  res.json({ success: true, agents: registeredAgents });
+});
+
+// 2. Refresh Token rotation endpoint
+app.post("/api/auth/refresh-token", (req, res) => {
+  try {
+    const refreshSchema = z.object({
+      token: z.string().min(5).max(500)
+    });
+
+    const parsed = refreshSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Token format error.", details: parsed.error.issues });
+    }
+
+    const { token } = parsed.data;
+
+    // Search for token in our active register
+    const foundToken = activeRefreshTokens.find(t => t.token === token);
+    
+    if (!foundToken) {
+      return res.status(401).json({ error: "Access Denied: Refresh token not found in whitelist database." });
+    }
+
+    if (foundToken.revoked) {
+      // Token Reuse Detected! Revoke all tokens for this user as defense
+      activeRefreshTokens = activeRefreshTokens.filter(t => t.userId !== foundToken.userId);
+      return res.status(403).json({
+        error: "SECURITY BREACH DETECTED: Refresh token reuse flagged. Dynamic revocation active.",
+        strategy: "All active sessions for this user have been purged from database instantly."
+      });
+    }
+
+    // Mark previous token as revoked
+    foundToken.revoked = true;
+
+    // Generate rotated ones
+    const randomSuffix = Math.random().toString(36).substring(2, 10);
+    const newAccessToken = `access-token-rotated-${randomSuffix}`;
+    const newRefreshToken = `refresh-token-rotated-${randomSuffix}`;
+
+    // Add new refresh token
+    activeRefreshTokens.push({
+      token: newRefreshToken,
+      userId: foundToken.userId,
+      expiresAt: Date.now() + 7 * 24 * 3600 * 1000,
+      revoked: false
+    });
+
+    res.json({
+      success: true,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      user: foundToken.userId,
+      status: "ROTATION_SUCCESSFUL",
+      metadata: {
+        revokedOldToken: token.substring(0, 15) + "...",
+        newExpiration: new Date(Date.now() + 7 * 24 * 3600 * 1000).toLocaleString()
+      }
+    });
+
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch active tokens
+app.get("/api/auth/tokens-state", (req, res) => {
+  res.json(activeRefreshTokens);
+});
+
+// Reset token states
+app.post("/api/auth/tokens-reset", (req, res) => {
+  activeRefreshTokens = [
+    { token: "initial-ref-token-xyz-123456", userId: "user-rudra-852", expiresAt: Date.now() + 7 * 24 * 3600 * 1000, revoked: false }
+  ];
+  res.json({ success: true, tokens: activeRefreshTokens });
+});
+
+// 3. Queue / BullMQ Async Job queueing simulator
+app.post("/api/queue/add", (req, res) => {
+  try {
+    const queueAddSchema = z.object({
+      prompt: z.string().min(1).max(1000).trim()
+    });
+
+    const parsed = queueAddSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Queue payload validation failure.", details: parsed.error.issues });
+    }
+
+    const { prompt } = parsed.data;
+    const jobId = `job-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+
+    const newJob: QueueJob = {
+      id: jobId,
+      prompt,
+      status: "queued",
+      progress: 0,
+      addedAt: new Date().toLocaleTimeString()
+    };
+
+    asyncTaskQueue.unshift(newJob);
+
+    // Simulated workers
+    setTimeout(() => {
+      const liveJob = asyncTaskQueue.find(j => j.id === jobId);
+      if (liveJob) {
+        liveJob.status = "active";
+        liveJob.progress = 25;
+      }
+    }, 1500);
+
+    setTimeout(() => {
+      const liveJob = asyncTaskQueue.find(j => j.id === jobId);
+      if (liveJob) {
+        liveJob.progress = 65;
+      }
+    }, 3500);
+
+    setTimeout(() => {
+      const liveJob = asyncTaskQueue.find(j => j.id === jobId);
+      if (liveJob) {
+        liveJob.status = "completed";
+        liveJob.progress = 100;
+        liveJob.result = `LLM Synthesis resolved: Successfully compiled dynamic response parameters for request: "${prompt.substring(0, 30)}..." with zero errors. Output metadata secure.`;
+      }
+    }, 6000);
+
+    res.status(202).json({
+      status: "processing",
+      id: jobId,
+      message: "Job dispatched to BullMQ virtual worker pool.",
+      telemetry: {
+        queueSize: asyncTaskQueue.length,
+        workerLoad: "Optimum"
+      }
+    });
+
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch active background jobs status
+app.get("/api/queue/jobs", (req, res) => {
+  res.json(asyncTaskQueue);
+});
+
+// Clear async tasks
+app.post("/api/queue/clear", (req, res) => {
+  asyncTaskQueue = [];
+  res.json({ success: true, queue: asyncTaskQueue });
+});
+
+// ==========================================
+// SECURE COMPUTER CONTROL AGENT LAYER API
+// ==========================================
+import { ActionEngine } from "./backend/computer/actionEngine";
+const computerEngine = new ActionEngine();
+
+// Fetch total agents list including state & trust metrics
+app.get("/api/computer/agents-state", (req, res) => {
+  res.json({
+    engine: computerEngine.getEngineState(),
+    workflowMemories: computerEngine.workflowMemory.getActions()
+  });
+});
+
+// Configure Permissions
+app.post("/api/computer/permissions", (req, res) => {
+  const permSchema = z.object({
+    key: z.string(),
+    value: z.boolean()
+  });
+  const parsed = permSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid permission schema payload." });
+  }
+  const { key, value } = parsed.data;
+  computerEngine.permissionEngine.setPermission(key as any, value);
+  res.json({ success: true, permissions: computerEngine.permissionEngine.getPermissions() });
+});
+
+// Toggle Sandbox Mode
+app.post("/api/computer/sandbox", (req, res) => {
+  const sandboxSchema = z.object({ active: z.boolean() });
+  const parsed = sandboxSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid active status." });
+  }
+  computerEngine.setSandboxMode(parsed.data.active);
+  res.json({ success: true, sandboxMode: parsed.data.active });
+});
+
+// Generate task workflow sub-plans
+app.post("/api/computer/generate-plan", (req, res) => {
+  const goalSchema = z.object({ goal: z.string().min(1).max(1000) });
+  const parsed = goalSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Goal parameter requirements unfulfilled." });
+  }
+  const { goal } = parsed.data;
+  computerEngine.runGoalPlan(goal).then(plan => {
+    res.json(plan);
+  }).catch(err => {
+    res.status(500).json({ error: err.message });
+  });
+});
+
+// Execute targeted computer step actions with permission checks
+app.post("/api/computer/execute-task", async (req, res) => {
+  try {
+    const taskExecSchema = z.object({
+      task: z.object({
+        action: z.enum(["open_app", "write_text", "search_web", "click_coordinates"]),
+        app: z.string().optional(),
+        text: z.string().optional(),
+        query: z.string().optional(),
+        coordinates: z.object({ x: z.number(), y: z.number() }).optional()
+      }),
+      parentGoal: z.string().max(1000)
+    });
+
+    const parsed = taskExecSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid execution parameters supplied.", details: parsed.error.issues });
+    }
+
+    const { task, parentGoal } = parsed.data;
+
+    // Evaluate Risk
+    const rScore = computerEngine.riskEngine.calculateRiskScore(task.query || task.text || task.app || parentGoal);
+    
+    // Check permission requirements
+    let authorized = true;
+    let failReason = "";
+
+    if (task.action === "search_web" && !computerEngine.permissionEngine.isAllowed("browserAccess")) {
+      authorized = false;
+      failReason = "Browser access permissions are locked by Operator.";
+    }
+    if (task.action === "open_app" && !computerEngine.permissionEngine.isAllowed("desktopControl")) {
+      authorized = false;
+      failReason = "Desktop app execution commands are blocked.";
+    }
+    if ((task.action === "write_text" || task.action === "click_coordinates") && !computerEngine.permissionEngine.isAllowed("desktopControl")) {
+      authorized = false;
+      failReason = "Simulated interaction devices (mouse, keys) are locked.";
+    }
+
+    if (!authorized) {
+      computerEngine.adjustTrustScore(-10); // Lower trust due to unauthorized actions
+      return res.status(403).json({
+        success: false,
+        authorized: false,
+        riskScore: rScore.score,
+        reason: failReason,
+        trustScore: computerEngine.getEngineState().trustScore
+      });
+    }
+
+    // Run action execution
+    const runResult = await computerEngine.desktopAgent.execute(task);
+    
+    // Increment trust score for clean sandboxed operations
+    computerEngine.adjustTrustScore(2);
+
+    // Save record to action ledger database
+    computerEngine.workflowMemory.recordAction(parentGoal, runResult.output, runResult.success);
+
+    return res.json({
+      success: runResult.success,
+      authorized: true,
+      riskScore: rScore.score,
+      steps: runResult.output,
+      trustScore: computerEngine.getEngineState().trustScore
+    });
+
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Swarm Coordinator solve endpoint
+import { Coordinator } from "./backend/agents/coordinator/Coordinator";
+const swarmCoordinator = new Coordinator();
+
+app.post("/api/computer/swarm-solve", async (req, res) => {
+  try {
+    const goalSchema = z.object({ goal: z.string().min(1).max(1000) });
+    const parsed = goalSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Goal required" });
+    }
+    const result = await swarmCoordinator.solve(parsed.data.goal);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===============================================
+// AGENT SOCIETY & BRAIN CIVILIZATION COGNITION API
+// ===============================================
+import consciousWorkspace from "./backend/brain/ConsciousWorkspace";
+import worldSimulator from "./backend/brain/WorldSimulator";
+import digitalTwin from "./backend/brain/DigitalTwin";
+import memoryCivilization from "./backend/brain/MemoryCivilization";
+import skillEngine from "./backend/brain/SkillEngine";
+import thinkingLoop from "./backend/brain/ThinkingLoop";
+import guardian from "./backend/security/Guardian";
+import agentSociety from "./backend/agents/society/AgentSociety";
+
+// Fetch whole cognitive civilization state metadata
+app.get("/api/agent-civilization/state", (req, res) => {
+  res.json({
+    workspace: consciousWorkspace.getThoughts(),
+    digitalTwin: digitalTwin.getState(),
+    memory: {
+      nodes: memoryCivilization.getRankedMemories(),
+      relations: memoryCivilization.getRelations()
+    },
+    skills: skillEngine.getSkills(),
+    guardian: {
+      laws: guardian.getLaws(),
+      trustState: guardian.getTrustState(),
+      biometricMesh: guardian.getBiometricMesh()
+    }
+  });
+});
+
+// Post a new conscious thought manually (or dynamic triggers)
+app.post("/api/agent-civilization/thought", (req, res) => {
+  const thoughtSchema = z.object({
+    agent: z.string(),
+    thought: z.string(),
+    importance: z.number().optional()
+  });
+  const parsed = thoughtSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid thought schema" });
+  }
+  const { agent, thought, importance } = parsed.data;
+  const newTh = consciousWorkspace.publish(agent, thought, importance);
+  res.json({ success: true, thought: newTh });
+});
+
+// Trigger complete Thinking Loop
+app.post("/api/agent-civilization/think-loop", async (req, res) => {
+  try {
+    const goalSchema = z.object({ goal: z.string().min(1).max(1000) });
+    const parsed = goalSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Goal parameter required" });
+    }
+    const result = await thinkingLoop.processThinkingCycle(parsed.data.goal);
+    // Update Digital Twin model focus based on goal
+    digitalTwin.simulateActiveShift("VS Code", true);
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Post action solver that runs Agent Society's concurrent debate cycle
+app.post("/api/agent-civilization/society-solve", async (req, res) => {
+  try {
+    const goalSchema = z.object({ goal: z.string().min(1).max(1000) });
+    const parsed = goalSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Goal parameter required" });
+    }
+    const result = await agentSociety.solve(parsed.data.goal);
+    // Update Digital Twin behavior
+    digitalTwin.updateTwinState({ focus: `Coordinating Specialist Swarm Debate: ${parsed.data.goal}` });
+    res.json({ success: true, ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Evolve selected skill genomics DNA
+app.post("/api/agent-civilization/evolve-skill", (req, res) => {
+  const idSchema = z.object({ id: z.string() });
+  const parsed = idSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Skill id required" });
+  }
+  const evolved = skillEngine.evolveSkill(parsed.data.id);
+  if (!evolved) {
+    return res.status(404).json({ error: "Skill not found" });
+  }
+  consciousWorkspace.publish("SelfEvolvingSkillEngine", `Genome evolved for skill "${evolved.task}". Confidence raised to ${Math.round(evolved.confidence * 100)}%.`, 7);
+  res.json({ success: true, skill: evolved });
+});
+
+// Trigger Sleep cycle Dream Defragmenter
+app.post("/api/agent-civilization/dream", async (req, res) => {
+  try {
+    const logs = await memoryCivilization.compressAndPruneMemories();
+    res.json({ success: true, logs });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update Guardian parameters
+app.post("/api/agent-civilization/security-scores", (req, res) => {
+  const scoreSchema = z.object({
+    deviceScore: z.number().optional(),
+    behaviorScore: z.number().optional(),
+    locationScore: z.number().optional(),
+    faceMatchScore: z.number().optional(),
+    voiceVerifyScore: z.number().optional(),
+    typingPatternAccuracy: z.number().optional()
+  });
+  const parsed = scoreSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "Invalid scoring parameters" });
+  }
+  
+  const data = parsed.data;
+  if (data.deviceScore !== undefined || data.behaviorScore !== undefined || data.locationScore !== undefined) {
+    guardian.mutateTrustScores({
+      deviceScore: data.deviceScore,
+      behaviorScore: data.behaviorScore,
+      locationScore: data.locationScore
+    });
+  }
+
+  if (data.faceMatchScore !== undefined || data.voiceVerifyScore !== undefined || data.typingPatternAccuracy !== undefined) {
+    guardian.mutateBiometricScores({
+      faceMatchScore: data.faceMatchScore,
+      voiceVerifyScore: data.voiceVerifyScore,
+      typingPatternAccuracy: data.typingPatternAccuracy
+    });
+  }
+
+  res.json({
+    success: true,
+    trustState: guardian.getTrustState(),
+    biometricMesh: guardian.getBiometricMesh()
+  });
+});
+
+
+
 // Setup Vite Dev Middleware or Serve Static Build Files
 async function setupVite() {
   if (process.env.NODE_ENV !== "production") {
