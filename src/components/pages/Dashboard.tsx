@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import AgentNetworkVisualizer from "../AgentNetworkVisualizer";
+import { useAuth } from "../../hooks/useAuth";
 import {
   Activity,
   Cpu,
@@ -64,6 +65,64 @@ export interface SecurityIncident {
 }
 
 export default function Dashboard() {
+  const { user, role, isApproved, profile, loading: authLoading, refreshing: authRefreshing, refreshProfile, clearanceLabel, capabilities } = useAuth();
+  const [localSyncProgress, setLocalSyncProgress] = useState(0);
+  const [isLocalScanning, setIsLocalScanning] = useState(false);
+
+  const playLocalBeep = (freq = 440, duration = 0.15, type: OscillatorType = "sine") => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      gain.gain.setValueAtTime(0.04, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + duration);
+    } catch (e) {
+      console.warn("Audio Context not allowed or supported yet (gestures needed):", e);
+    }
+  };
+
+  const handleIdentityReverify = async () => {
+    if (isLocalScanning) return;
+    setIsLocalScanning(true);
+    setLocalSyncProgress(0);
+    playLocalBeep(750, 0.15, "triangle");
+
+    const duration = 1200; // ms
+    const intervals = 12;
+    const step = 100 / intervals;
+    for (let i = 1; i <= intervals; i++) {
+      await new Promise((resolve) => setTimeout(resolve, duration / intervals));
+      setLocalSyncProgress((prev) => Math.min(100, Math.round(prev + step)));
+      if (i % 3 === 0) {
+        playLocalBeep(600 + i * 25, 0.05, "sine");
+      }
+    }
+
+    await refreshProfile();
+    setIsLocalScanning(false);
+    playLocalBeep(880, 0.22, "sine");
+
+    const now = new Date();
+    const ts = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}`;
+    
+    setSecurityIncidents((prev) => [
+      {
+        id: `sec-${Date.now()}`,
+        timestamp: ts,
+        type: "INFO",
+        message: `Biometric handshake successfully synchronized. Node cleared for role [${role.toUpperCase()}] under status [${isApproved ? 'APPROVED' : 'SECURE_HOLD'}].`,
+        source: user?.email || "Local Socket"
+      },
+      ...prev
+    ]);
+  };
+
   const [cpuLoad, setCpuLoad] = useState(45);
   const [memoryLoad, setMemoryLoad] = useState(62);
   const [gpuLoad, setGpuLoad] = useState(38);
@@ -513,7 +572,7 @@ export default function Dashboard() {
           drag={dragEnabled}
           dragConstraints={{ left: -10, right: 10, top: -10, bottom: 10 }}
           dragElastic={0.02}
-          className="lg:col-span-2 p-5 border border-white/10 bg-black/40 rounded-xl backdrop-blur-md relative flex flex-col justify-between"
+          className="p-5 border border-white/10 bg-black/40 rounded-xl backdrop-blur-md relative flex flex-col justify-between"
         >
           {/* HUD Target markers */}
           <div className="absolute top-2 right-2 flex gap-1 z-10">
@@ -690,6 +749,132 @@ export default function Dashboard() {
               className="text-red-400/70 hover:text-red-400 font-bold uppercase transition-all"
             >
               Flush
+            </button>
+          </div>
+        </motion.div>
+
+        {/* Card Panel C: Biometric Clearance & Role Integrity */}
+        <motion.div
+          drag={dragEnabled}
+          dragConstraints={{ left: -10, right: 10, top: -10, bottom: 10 }}
+          dragElastic={0.02}
+          className="p-5 border border-white/10 bg-black/40 rounded-xl backdrop-blur-md flex flex-col justify-between"
+        >
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono font-bold tracking-widest text-[#a855f7] flex items-center gap-2">
+                <ShieldCheck size={13} className="text-[#a855f7]" /> BIOMETRIC CLEARANCE
+              </span>
+              <span className="text-[8px] font-mono text-slate-500 uppercase">
+                {isLocalScanning ? "SCANNING GRIDS..." : authRefreshing ? "REFRESHING..." : "INTEGRITY ACTIVE"}
+              </span>
+            </div>
+
+            {/* User credentials details */}
+            <div className="bg-zinc-950/60 border border-white/5 p-3 rounded-lg font-mono text-[10px] space-y-2.5 relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-12 h-12 bg-purple-500/5 rounded-full blur-xl" />
+              
+              <div className="flex justify-between border-b border-white/5 pb-1.5">
+                <span className="text-zinc-500 uppercase text-[8px]">CALLSIGN ID</span>
+                <span className="text-slate-200 font-bold truncate max-w-[140px]">
+                  {user ? (user.displayName || user.email?.split("@")[0]) : "UNAUTHORIZED"}
+                </span>
+              </div>
+
+              <div className="flex justify-between border-b border-white/5 pb-1.5">
+                <span className="text-zinc-500 uppercase text-[8px]">CORE SECTOR</span>
+                <span className="text-slate-200 truncate max-w-[140px]">
+                  {user ? user.email : "LOCAL_LOOPBACK"}
+                </span>
+              </div>
+
+              <div className="flex justify-between select-none">
+                <span className="text-zinc-500 uppercase text-[8px]">CLEARANCE VALUE</span>
+                <span className={`font-black uppercase text-[9px] px-1.5 py-0.5 rounded border ${
+                  role === "admin" 
+                    ? "bg-cyan-500/10 border-cyan-500/30 text-cyan-400" 
+                    : role === "developer"
+                    ? "bg-purple-500/10 border-purple-500/30 text-purple-400"
+                    : role === "premium"
+                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                    : role === "beta"
+                    ? "bg-amber-500/10 border-amber-500/30 text-amber-500 animate-pulse"
+                    : "bg-slate-800/20 border-white/10 text-slate-400"
+                }`}>
+                  {role.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            {/* Dynamic Clearance details bar */}
+            <div className="p-2.5 bg-black/40 border border-white/5 rounded-lg font-mono text-[9px] space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="relative flex h-2 w-2">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${isApproved ? "bg-emerald-400" : "bg-red-400"}`}></span>
+                  <span className={`relative inline-flex rounded-full h-2 w-2 ${isApproved ? "bg-emerald-500" : "bg-red-500"}`}></span>
+                </span>
+                <span className="text-slate-300 font-bold uppercase">{clearanceLabel}</span>
+              </div>
+              <p className="text-slate-400 leading-snug text-[8px] italic">
+                {isApproved 
+                  ? "Node permissions and neural gates fully matching token descriptors." 
+                  : "Security clearance pending. Advanced operational sub-cores locked until approved."}
+              </p>
+            </div>
+
+            {/* List of active authorization capability tags */}
+            <div className="space-y-1">
+              <span className="text-[7.5px] font-mono text-slate-500 block uppercase font-bold">CAPABILITIES Mapped:</span>
+              <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto pr-1">
+                {capabilities.map((cap) => (
+                  <span 
+                    key={cap}
+                    className="px-1.5 py-0.5 border border-white/5 bg-white/5 rounded text-[7.5px] font-mono font-semibold text-slate-300 hover:border-white/15 hover:text-white transition-all"
+                  >
+                    {cap}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Scanning or auth status loading bar */}
+            {(isLocalScanning || authLoading || authRefreshing) && (
+              <div className="space-y-1 font-mono text-[8px] animate-pulse">
+                <div className="flex justify-between text-cyan-400">
+                  <span>{isLocalScanning ? "BIOMETRIC SCAN IN PROGRESS" : "QUERYING REGISTER CORES..."}</span>
+                  <span>{isLocalScanning ? `${localSyncProgress}%` : "SYNC..."}</span>
+                </div>
+                <div className="h-1 w-full bg-slate-850 border border-white/5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-300"
+                    style={{ width: `${isLocalScanning ? localSyncProgress : 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="pt-3 border-t border-white/5 flex flex-col gap-2">
+            <button
+              onClick={handleIdentityReverify}
+              disabled={isLocalScanning || authLoading || authRefreshing}
+              className={`w-full py-1.5 font-mono text-[9px] font-bold border rounded-lg uppercase tracking-wider transition-all duration-300 cursor-pointer flex items-center justify-center gap-2 ${
+                isLocalScanning || authLoading || authRefreshing
+                  ? "bg-slate-900 border-white/5 text-slate-600 cursor-not-allowed"
+                  : "bg-[#a855f7]/10 hover:bg-[#a855f7]/20 text-[#c084fc] hover:shadow-[0_0_8px_rgba(168,85,247,0.25)] border-[#a855f7]/30"
+              }`}
+            >
+              {(isLocalScanning || authLoading || authRefreshing) ? (
+                <>
+                  <Loader className="animate-spin text-purple-400" size={10} />
+                  <span>SYNCHRONIZING SECURE TUNNELS</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw size={10} className="text-[#c084fc]" />
+                  <span>AUTOVERIFY CLEARANCE SECURE</span>
+                </>
+              )}
             </button>
           </div>
         </motion.div>

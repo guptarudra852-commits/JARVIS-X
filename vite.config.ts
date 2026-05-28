@@ -12,6 +12,10 @@ export default defineConfig(() => {
         'react': path.resolve(__dirname, 'node_modules/react'),
         'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
       },
+      dedupe: ['react', 'react-dom'],
+    },
+    build: {
+      chunkSizeWarningLimit: 1600,
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
