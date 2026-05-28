@@ -19,7 +19,8 @@ export type PageId =
   | "settings"
   | "vaultshield"
   | "bloom"
-  | "cognition";
+  | "cognition"
+  | "admin";
 
 export interface NavigationItem {
   id: PageId;

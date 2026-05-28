@@ -14,7 +14,7 @@ import {
   ShieldCheck, 
   Chrome 
 } from "lucide-react";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { 
   auth, 
@@ -134,15 +134,27 @@ export default function LoginSignup({ onLogMessage, onLoginStatusChange, mode = 
     onLoginStatusChange(userNick);
     setAuthSuccess(true);
     
-    // Auto-create profile in Firestore if it doesn't exist
+    // Auto-create/initialize profile in Firestore securely
     try {
-      await setDoc(doc(db, "users", user.uid), {
+      const userRef = doc(db, "users", user.uid);
+      const userSnap = await getDoc(userRef);
+      
+      const payload: any = {
         email: user.email || "",
         phoneNumber: user.phoneNumber || "",
         displayName: userNick,
         lastLogin: serverTimestamp(),
-        createdAt: serverTimestamp() // Firestore merges securely
-      }, { merge: true });
+      };
+      
+      // Only set defaults if user is completely brand new
+      if (!userSnap.exists()) {
+        payload.createdAt = serverTimestamp();
+        payload.role = "guest";
+        payload.approved = false;
+        payload.allowedDevices = [];
+      }
+      
+      await setDoc(userRef, payload, { merge: true });
       onLogMessage("CORE", `Firestore database synchronized with user record UID: ${user.uid}`);
     } catch (fsError: any) {
       onLogMessage("WARN", `Could not synchronize user doc to Firestore: ${fsError.message}`);

@@ -23,6 +23,30 @@ import {
   Search,
 } from "lucide-react";
 import { ChatMessage } from "../../types";
+import { 
+  collection, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  updateDoc, 
+  query, 
+  serverTimestamp,
+  where
+} from "firebase/firestore";
+import { db, auth } from "../../lib/firebase";
+import { 
+  ShieldCheck, 
+  ShieldAlert, 
+  Lock, 
+  UserPlus, 
+  Users, 
+  EyeOff, 
+  MessageSquareCode, 
+  PlusCircle, 
+  ArrowRight,
+  UserX,
+  Plus
+} from "lucide-react";
 
 interface AssistantProps {
   onLogMessage: (level: "INFO" | "WARN" | "CORE" | "ERROR", text: string) => void;
@@ -248,6 +272,199 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
 
   const [provider, setProvider] = useState<"openrouter">("openrouter");
 
+  // Secure Database Protected Chats state entries
+  const [chatMode, setChatMode] = useState<"standard" | "protected">("standard");
+  const [secureRooms, setSecureRooms] = useState<any[]>([]);
+  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
+  const [newRoomName, setNewRoomName] = useState("");
+  const [newRoomMembers, setNewRoomMembers] = useState("");
+  const [roomError, setRoomError] = useState("");
+  const [addMemberUid, setAddMemberUid] = useState("");
+
+  // Live Sync with Firestore Protected Chats table
+  useEffect(() => {
+    let unsubscribe: () => void = () => {};
+    
+    if (auth.currentUser) {
+      const q = query(
+        collection(db, "chats"),
+        where("members", "array-contains", auth.currentUser.uid)
+      );
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const rooms: any[] = [];
+        snapshot.forEach((snap) => {
+          const data = snap.data();
+          const currentUID = auth.currentUser?.uid || "";
+          
+          // Safety logic map
+          const isOwner = data.owner === currentUID;
+          const isMember = data.members && data.members.includes(currentUID);
+          
+          if (isOwner || isMember) {
+            rooms.push({ id: snap.id, ...data });
+          }
+        });
+        setSecureRooms(rooms);
+      }, (err) => {
+        console.error("Firestore rooms listener failed: ", err);
+      });
+    }
+    
+    return () => unsubscribe();
+  }, [chatMode]);
+
+  const handleSelectRoom = (room: any) => {
+    setRoomError("");
+    try {
+      const currentUID = auth.currentUser?.uid || "";
+      const isOwner = room.owner === currentUID;
+      const isMember = room.members && room.members.includes(currentUID);
+      
+      // Strict direct requirement check: "if(!chat.members.includes(currentUID)) throw new Error('Chat access denied')"
+      if (!isOwner && !isMember) {
+        throw new Error("Chat access denied");
+      }
+      
+      setActiveRoomId(room.id);
+      onLogMessage("CORE", `Uplink established: Decrypted secure chat room channel: ${room.name}`);
+    } catch (err: any) {
+      setRoomError("BIOMETRIC ACCESS DENIED: Your credential hash is not whitelisted for this protected room.");
+      onLogMessage("ERROR", `Security access breach denied for secure room: ${room.name}`);
+    }
+  };
+
+  const handleCreateSecureRoom = async () => {
+    if (!newRoomName.trim()) return;
+    try {
+      const currentUID = auth.currentUser?.uid || "";
+      const memberArray = newRoomMembers
+        .split(",")
+        .map(u => u.trim())
+        .filter(u => u.length > 0);
+      
+      // Auto-include owner
+      if (!memberArray.includes(currentUID)) {
+        memberArray.push(currentUID);
+      }
+      
+      const newRoomRef = doc(collection(db, "chats"));
+      await setDoc(newRoomRef, {
+        name: newRoomName.trim(),
+        owner: currentUID,
+        members: memberArray,
+        messages: [
+          {
+            role: "assistant",
+            content: `🔒 **[UPLINK CHANNEL ESTABLISHED]** This secure channel was created by Captain ${auth.currentUser?.displayName || "AGENT"} under active military encryption protocols. Only listed biometric identities have authorization signature permission.`,
+            sender: "JARVIS Core",
+            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          }
+        ],
+        createdAt: serverTimestamp()
+      });
+      
+      setNewRoomName("");
+      setNewRoomMembers("");
+      setActiveRoomId(newRoomRef.id);
+      onLogMessage("CORE", `Created encrypted uplink channel: ${newRoomName}`);
+    } catch (err: any) {
+      setRoomError(`Uplink initialize error: ${err.message}`);
+      onLogMessage("ERROR", `Failed to compile secure channel template: ${err.message}`);
+    }
+  };
+
+  const handleAddNewMember = async () => {
+    if (!addMemberUid.trim() || !activeRoomId) return;
+    
+    const activeRoom = secureRooms.find(r => r.id === activeRoomId);
+    if (!activeRoom) return;
+    
+    if (activeRoom.owner !== auth.currentUser?.uid) {
+      setRoomError("REVOCATION BREACH: Only the primary Owner of this secure uplink can verify and append biometric member clearances.");
+      return;
+    }
+
+    try {
+      const currentMembers = activeRoom.members || [];
+      if (currentMembers.includes(addMemberUid.trim())) {
+        setRoomError("Identity signature already bound in room.");
+        return;
+      }
+
+      const updatedMembers = [...currentMembers, addMemberUid.trim()];
+      await updateDoc(doc(db, "chats", activeRoomId), {
+        members: updatedMembers
+      });
+      
+      setAddMemberUid("");
+      onLogMessage("CORE", `Successfully assigned clearance credentials to UID [${addMemberUid.trim().slice(0, 6)}]`);
+    } catch (err: any) {
+      setRoomError(`Failed to bind member clearance: ${err.message}`);
+    }
+  };
+
+  const handleSendSecureMessage = async () => {
+    const rawText = inputText.trim();
+    if (!rawText || !activeRoomId) return;
+    
+    const activeRoom = secureRooms.find(r => r.id === activeRoomId);
+    if (!activeRoom) return;
+
+    try {
+      const currentUID = auth.currentUser?.uid || "";
+      
+      // Safety check BEFORE sending
+      if (activeRoom.owner !== currentUID && !activeRoom.members.includes(currentUID)) {
+        throw new Error("Chat access denied");
+      }
+
+      const newMsg = {
+        role: "user",
+        content: rawText,
+        sender: auth.currentUser?.displayName || auth.currentUser?.email || "Biometric User",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      };
+
+      const updatedMsgs = [...(activeRoom.messages || []), newMsg];
+      
+      setIsTyping(true);
+      setInputText("");
+
+      const userHistory = updatedMsgs.map(m => ({ role: m.role, content: m.content }));
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: userHistory.slice(-5), provider }),
+      });
+      
+      let aiText = "Secure buffer returned zero values.";
+      if (response.ok) {
+        const data = await response.json();
+        aiText = data.text;
+      }
+      
+      const aiMsg = {
+        role: "assistant",
+        content: aiText,
+        sender: "JARVIS AI SYSTEM",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      };
+
+      const finalMsgs = [...updatedMsgs, aiMsg];
+
+      await updateDoc(doc(db, "chats", activeRoomId), {
+        messages: finalMsgs
+      });
+      
+      onLogMessage("CORE", "Transmitted encrypted military signal payload.");
+    } catch (err: any) {
+      setRoomError(`Signal payload transmit breach: ${err.message}`);
+      onLogMessage("ERROR", `Transmit error on secure room ID ${activeRoomId}`);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   /* ── live telemetry ── */
   const [latency,    setLatency]    = useState(128);
   const [memoryIdx,  setMemoryIdx]  = useState(87.4);
@@ -445,197 +662,430 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
         </div>
 
         {/* Action buttons */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 border border-fuchsia-500/30 bg-fuchsia-950/20 text-fuchsia-300 rounded-lg text-[8px] font-mono uppercase tracking-wider">
-            <Zap size={9} className="text-fuchsia-400" />
-            <span>OPENROUTER ACTIVE</span>
+        <div className="flex items-center gap-2 font-mono text-[8px] tracking-wider uppercase">
+          {/* Mode Switcher */}
+          <div className="flex border border-zinc-800 bg-black/40 rounded-lg overflow-hidden p-0.5">
+            <button
+              type="button"
+              onClick={() => setChatMode("standard")}
+              className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${
+                chatMode === "standard"
+                  ? "bg-cyan-500/20 text-cyan-400 font-bold border border-cyan-500/30"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              LOCAL SYNAPSE
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatMode("protected")}
+              className={`px-3 py-1.5 rounded-md transition-all flex items-center gap-1 cursor-pointer ${
+                chatMode === "protected"
+                  ? "bg-fuchsia-500/20 text-fuchsia-400 font-bold border border-fuchsia-500/30"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              <Lock size={8} /> SECURE HUB (DB)
+            </button>
           </div>
-          <button
-            onClick={clearHistory}
-            className="flex items-center gap-1.5 px-3 py-1.5 border border-white/10 bg-white/5 text-slate-400 rounded-lg text-[8px] font-mono uppercase tracking-wider hover:text-white hover:border-white/20 transition-all cursor-pointer"
-          >
-            <RotateCcw size={9} /> CLEAR CACHE
-          </button>
+
+          {chatMode === "standard" ? (
+            <>
+              <div className="flex items-center gap-1.5 px-3 py-1.5 border border-fuchsia-500/30 bg-fuchsia-950/20 text-fuchsia-300 rounded-lg">
+                <Zap size={9} className="text-fuchsia-400" />
+                <span>OPENROUTER ACTIVE</span>
+              </div>
+              <button
+                type="button"
+                onClick={clearHistory}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-white/10 bg-white/5 text-slate-400 rounded-lg hover:text-white hover:border-white/20 transition-all cursor-pointer"
+              >
+                <RotateCcw size={9} /> CLEAR CACHE
+              </button>
+            </>
+          ) : (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 border border-green-500/30 bg-green-950/20 text-green-300 rounded-lg">
+              <ShieldCheck size={9} className="text-green-400" />
+              <span>AES-256 SECURED</span>
+            </div>
+          )}
         </div>
       </div>
 
       {/* ── MAIN 3-COLUMN GRID ── */}
       <div className="flex-1 flex gap-4 min-h-0">
 
-        {/* ═══ LEFT: AI STATUS PANEL ═══ */}
-        <div className="w-60 shrink-0 flex flex-col">
-          <div className="flex-1 border border-cyan-500/15 bg-black/45 backdrop-blur-md rounded-xl p-4 flex flex-col">
-
-            {/* Status header */}
-            <div className="flex items-center justify-between mb-1 pb-2.5 border-b border-cyan-500/10">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-300">AI Status</span>
-              <div className="flex items-center gap-1.5">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse" />
-                <span className="text-[8px] font-mono text-green-400 font-bold uppercase">Online</span>
-              </div>
-            </div>
-
-            {/* Neural orb */}
-            <NeuralOrb />
-
-            {/* Neural link progress */}
-            <div className="space-y-1 mb-4">
-              <div className="flex justify-between items-center">
-                <span className="text-[8px] font-mono text-slate-500 uppercase tracking-wider">Neural Link Stable</span>
-              </div>
-              <div className="h-1 bg-cyan-950/50 rounded border border-cyan-500/10 overflow-hidden">
-                <motion.div
-                  className="h-full bg-gradient-to-r from-cyan-600 to-cyan-300 rounded"
-                  animate={{ width: `${neuralLink}%` }}
-                  transition={{ duration: 1.5, ease: "easeOut" }}
-                />
-              </div>
-              <span className="text-[10px] font-mono font-bold text-cyan-400">{neuralLink.toFixed(1)}%</span>
-            </div>
-
-            {/* Divider + stats */}
-            <div className="flex-1 space-y-3 border-t border-cyan-500/10 pt-3">
-
-              {/* Active model */}
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                  <Server size={9} className="text-cyan-400" />Active Model
-                </div>
-                <span className="text-[9px] font-mono font-bold text-cyan-300">
-                  OPENROUTER FREE
-                </span>
-              </div>
-
-              {/* Response latency */}
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                  <Clock size={9} className="text-blue-400" />Response Latency
-                </div>
+        {/* ═══ LEFT: AI STATUS OR SECURE ROOMS PANEL ═══ */}
+        <div className="w-60 shrink-0 flex flex-col font-mono text-xs">
+          {chatMode === "standard" ? (
+            <div className="flex-1 border border-cyan-500/15 bg-black/45 backdrop-blur-md rounded-xl p-4 flex flex-col">
+              {/* Status header */}
+              <div className="flex items-center justify-between mb-1 pb-2.5 border-b border-cyan-500/10">
+                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-300">AI Status</span>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-mono font-bold text-white">{Math.round(latency)}ms</span>
-                  {/* Mini waveform */}
-                  <div className="flex items-end gap-px h-3">
-                    {[2,4,3,5,2,4,3,2,5].map((h, i) => (
-                      <div key={i} className="w-px bg-cyan-400/50 rounded"
-                        style={{ height: `${h * 2}px`, animationDelay: `${i * 0.12}s` }} />
-                    ))}
-                  </div>
+                  <div className="w-1.5 h-1.5 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse" />
+                  <span className="text-[8px] font-mono text-green-400 font-bold uppercase">Online</span>
                 </div>
               </div>
 
-              {/* Memory index */}
-              <div className="space-y-1">
+              {/* Neural orb */}
+              <NeuralOrb />
+
+              {/* Neural link progress */}
+              <div className="space-y-1 mb-4">
                 <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                    <Database size={9} className="text-fuchsia-400" />Memory Index
-                  </div>
-                  <span className="text-[9px] font-mono font-bold text-fuchsia-400">{memoryIdx.toFixed(1)}%</span>
+                  <span className="text-[8px] font-mono text-slate-500 uppercase tracking-wider">Neural Link Stable</span>
                 </div>
-                <div className="h-1 bg-fuchsia-950/30 rounded overflow-hidden">
+                <div className="h-1 bg-cyan-950/50 rounded border border-cyan-500/10 overflow-hidden">
                   <motion.div
-                    className="h-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-400 rounded"
-                    animate={{ width: `${memoryIdx}%` }}
-                    transition={{ duration: 1.5 }}
+                    className="h-full bg-gradient-to-r from-cyan-600 to-cyan-300 rounded"
+                    animate={{ width: `${neuralLink}%` }}
+                    transition={{ duration: 1.5, ease: "easeOut" }}
                   />
                 </div>
+                <span className="text-[10px] font-mono font-bold text-cyan-400">{neuralLink.toFixed(1)}%</span>
+              </div>
+
+              {/* Divider + stats */}
+              <div className="flex-1 space-y-3 border-t border-cyan-500/10 pt-3">
+                {/* Active model */}
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
+                    <Server size={9} className="text-cyan-400" />Active Model
+                  </div>
+                  <span className="text-[9px] font-mono font-bold text-cyan-300">
+                    OPENROUTER FREE
+                  </span>
+                </div>
+
+                {/* Response latency */}
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
+                    <Clock size={9} className="text-blue-400" />Response Latency
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-mono font-bold text-white">{Math.round(latency)}ms</span>
+                    {/* Mini waveform */}
+                    <div className="flex items-end gap-px h-3">
+                      {[2,4,3,5,2,4,3,2,5].map((h, i) => (
+                        <div key={i} className="w-px bg-cyan-400/50 rounded"
+                          style={{ height: `${h * 2}px`, animationDelay: `${i * 0.12}s` }} />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Memory index */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
+                      <Database size={9} className="text-fuchsia-400" />Memory Index
+                    </div>
+                    <span className="text-[9px] font-mono font-bold text-fuchsia-400">{memoryIdx.toFixed(1)}%</span>
+                  </div>
+                  <div className="h-1 bg-fuchsia-950/30 rounded overflow-hidden">
+                    <motion.div
+                      className="h-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-400 rounded"
+                      animate={{ width: `${memoryIdx}%` }}
+                      transition={{ duration: 1.5 }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 border border-fuchsia-500/15 bg-black/45 backdrop-blur-md rounded-xl p-3.5 flex flex-col space-y-4 overflow-y-auto scrollbar-none">
+              {/* Header */}
+              <div className="pb-2 border-b border-fuchsia-500/10">
+                <span className="text-[9px] font-bold tracking-widest text-fuchsia-400 uppercase">
+                  Encrypted Channels
+                </span>
+                <p className="text-[7px] text-zinc-500 uppercase mt-0.5">Biometric Compartments</p>
+              </div>
+
+              {/* Room list */}
+              <div className="space-y-1.5 flex-1 max-h-[220px] overflow-y-auto scrollbar-none">
+                {secureRooms.length === 0 ? (
+                  <div className="text-[9px] text-zinc-500 uppercase text-center py-4">No authorized rooms detected.</div>
+                ) : (
+                  secureRooms.map((room) => {
+                    const isActive = room.id === activeRoomId;
+                    return (
+                      <button
+                        type="button"
+                        key={room.id}
+                        onClick={() => handleSelectRoom(room)}
+                        className={`w-full text-left p-2 rounded-lg border text-[9px] flex flex-col transition-all cursor-pointer ${
+                          isActive
+                            ? "bg-fuchsia-950/30 border-fuchsia-500 text-fuchsia-300 shadow-[0_0_8px_rgba(217,70,239,0.15)]"
+                            : "bg-black/20 border-white/5 text-zinc-400 hover:border-white/10 hover:text-white"
+                        }`}
+                      >
+                        <span className="font-bold truncate">{room.name}</span>
+                        <span className="text-[7px] text-zinc-500 uppercase mt-0.5 truncate">
+                          Owner: {room.owner === auth.currentUser?.uid ? "YOU" : room.owner.slice(0, 8)}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* New Room Setup Trigger form */}
+              <div className="border-t border-fuchsia-500/10 pt-3 space-y-2 text-[9px]">
+                <span className="font-bold text-fuchsia-400 uppercase">Spawn Secure Node</span>
+                <input
+                  type="text"
+                  placeholder="Room Name..."
+                  value={newRoomName}
+                  onChange={(e) => setNewRoomName(e.target.value)}
+                  className="w-full bg-black/40 border border-white/5 rounded-lg p-2 text-[10px] text-white placeholder-zinc-650 focus:outline-none focus:border-fuchsia-500/30 font-mono"
+                />
+                <input
+                  type="text"
+                  placeholder="Clearance UIDs (comma separated)..."
+                  value={newRoomMembers}
+                  onChange={(e) => setNewRoomMembers(e.target.value)}
+                  className="w-full bg-black/40 border border-white/5 rounded-lg p-2 text-[10px] text-white placeholder-zinc-650 focus:outline-none focus:border-fuchsia-500/30 font-mono"
+                />
+                <button
+                  type="button"
+                  onClick={handleCreateSecureRoom}
+                  className="w-full py-1.5 bg-fuchsia-500/20 hover:bg-fuchsia-500/30 text-fuchsia-300 border border-fuchsia-500/20 rounded-lg font-bold tracking-wider uppercase transition-all cursor-pointer flex items-center justify-center gap-1"
+                >
+                  <Plus size={10} /> SECURE CHANNEL
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ═══ CENTER: CHAT ARENA ═══ */}
         <div className="flex-1 flex flex-col min-w-0 gap-0">
           <div className="flex-1 border border-cyan-500/15 bg-black/45 backdrop-blur-md rounded-xl flex flex-col overflow-hidden">
+            {chatMode === "standard" ? (
+              <>
+                {/* Scrollable messages */}
+                <div className="flex-1 overflow-y-auto scrollbar-none p-4 space-y-4">
+                  <AnimatePresence initial={false}>
+                    {messages.map((msg) => (
+                      <motion.div
+                        key={msg.id}
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className={`flex gap-2.5 ${msg.role === "user" ? "flex-row-reverse ml-auto max-w-[85%]" : "mr-auto max-w-[90%]"}`}
+                      >
+                        {/* Avatar */}
+                        <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                          msg.role === "user"
+                            ? "border-fuchsia-500/30 bg-fuchsia-950/20 text-fuchsia-400"
+                            : "border-cyan-500/30 bg-cyan-950/20 text-cyan-400"
+                        }`}>
+                          {msg.role === "user" ? <User size={12} /> : <Cpu size={12} />}
+                        </div>
 
-            {/* Scrollable messages */}
-            <div className="flex-1 overflow-y-auto scrollbar-none p-4 space-y-4">
-              <AnimatePresence initial={false}>
-                {messages.map((msg) => (
-                  <motion.div
-                    key={msg.id}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className={`flex gap-2.5 ${msg.role === "user" ? "flex-row-reverse ml-auto max-w-[85%]" : "mr-auto max-w-[90%]"}`}
-                  >
-                    {/* Avatar */}
-                    <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
-                      msg.role === "user"
-                        ? "border-fuchsia-500/30 bg-fuchsia-950/20 text-fuchsia-400"
-                        : "border-cyan-500/30 bg-cyan-950/20 text-cyan-400"
-                    }`}>
-                      {msg.role === "user" ? <User size={12} /> : <Cpu size={12} />}
+                        {/* Bubble */}
+                        <div className={`p-3.5 rounded-xl border relative group ${
+                          msg.role === "user"
+                            ? "bg-fuchsia-950/20 border-fuchsia-500/15 rounded-tr-sm"
+                            : "bg-black/60 border-cyan-500/15 rounded-tl-sm"
+                        }`}>
+                          {/* Meta header */}
+                          <div className="flex items-center justify-between gap-3 border-b border-white/5 pb-1.5 mb-2">
+                            <span className="text-[8px] font-mono text-slate-500 uppercase tracking-widest">
+                              {msg.role === "user" ? "PILOT INPUT" : "JARVIS X // RESPONSE"}&nbsp;•&nbsp;{msg.timestamp}
+                            </span>
+                            {msg.role === "assistant" && (
+                              <button
+                                type="button"
+                                onClick={() => { navigator.clipboard.writeText(msg.content); setCopiedId(msg.id); setTimeout(() => setCopiedId(null), 2000); }}
+                                className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-cyan-400 cursor-pointer pointer-events-auto"
+                              >
+                                {copiedId === msg.id ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="font-sans leading-relaxed">
+                            {parseMarkdown(msg.content)}
+                          </div>
+
+                          {/* Grounding sources */}
+                          {msg.role === "assistant" && msg.groundingSources && msg.groundingSources.length > 0 && (
+                            <div className="mt-2.5 pt-2 border-t border-cyan-500/10 flex flex-wrap gap-1.5">
+                              {msg.groundingSources.map((s: any, i: number) => (
+                                <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+                                  className="text-[8px] font-mono px-1.5 py-0.5 border border-cyan-500/15 bg-cyan-950/20 text-cyan-400 rounded hover:border-cyan-400/40 transition-all truncate max-w-[160px]">
+                                  ● {s.title}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+
+                  {/* Typing indicator */}
+                  {isTyping && (
+                    <div className="flex gap-2.5 mr-auto items-center">
+                      <div className="w-7 h-7 rounded-lg border border-cyan-500/30 bg-cyan-950/20 flex items-center justify-center">
+                        <Loader2 size={12} className="animate-spin text-cyan-400" />
+                      </div>
+                      <div className="px-3 py-2 bg-black/60 border border-cyan-500/15 rounded-xl text-[9px] font-mono text-cyan-400 flex items-center gap-1.5">
+                        <Activity size={9} className="animate-pulse" /> PROCESSING NEURAL STREAM...
+                      </div>
                     </div>
+                  )}
 
-                    {/* Bubble */}
-                    <div className={`p-3.5 rounded-xl border relative group ${
-                      msg.role === "user"
-                        ? "bg-fuchsia-950/20 border-fuchsia-500/15 rounded-tr-sm"
-                        : "bg-black/60 border-cyan-500/15 rounded-tl-sm"
-                    }`}>
-                      {/* Meta header */}
-                      <div className="flex items-center justify-between gap-3 border-b border-white/5 pb-1.5 mb-2">
-                        <span className="text-[8px] font-mono text-slate-500 uppercase tracking-widest">
-                          {msg.role === "user" ? "PILOT INPUT" : "JARVIS X // RESPONSE"}&nbsp;•&nbsp;{msg.timestamp}
-                        </span>
-                        {msg.role === "assistant" && (
+                  <div ref={chatEndRef} />
+                </div>
+
+                {/* Quick action buttons */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-4 pb-3 pt-2 border-t border-cyan-500/10 shrink-0">
+                  {quickActions.map((action, idx) => (
+                    <button
+                      key={idx}
+                      onClick={action.action}
+                      className="flex items-center gap-1.5 px-2.5 py-2 border border-cyan-500/15 bg-cyan-950/15 hover:bg-cyan-500/10 hover:border-cyan-400/35 text-cyan-400/80 hover:text-cyan-300 rounded-lg text-[8px] font-mono uppercase tracking-wide transition-all cursor-pointer"
+                    >
+                      {action.icon}
+                      <span className="truncate">{action.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              // PROTECTED DATABASE CHATS
+              <div className="flex-1 flex flex-col min-h-0">
+                {!activeRoomId ? (
+                  <div className="flex-1 flex flex-col items-center justify-center p-8 text-center font-mono space-y-4">
+                    <Lock className="w-12 h-12 text-fuchsia-500 animate-pulse bg-fuchsia-500/10 p-2.5 rounded-full border border-fuchsia-500/30 shadow-[0_0_15px_rgba(217,70,239,0.2)]" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-fuchsia-400">Secure Database Hub Uninitialized</h4>
+                    <p className="text-[10px] text-zinc-500 leading-relaxed uppercase max-w-sm">
+                      Please select an authorized encrypted room level from the Left Panel or spawn a new secure channel registry.
+                    </p>
+                  </div>
+                ) : (() => {
+                  const activeRoom = secureRooms.find(r => r.id === activeRoomId);
+                  if (!activeRoom) {
+                    return (
+                      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center font-mono space-y-2">
+                        <ShieldAlert className="text-red-500 w-10 h-10 animate-spin" />
+                        <h4 className="text-xs font-bold text-red-500 uppercase">ACCESS REGISTRY BLOCKED / REVOKED</h4>
+                      </div>
+                    );
+                  }
+
+                  const currentUID = auth.currentUser?.uid || "";
+                  const isOwner = activeRoom.owner === currentUID;
+
+                  return (
+                    <div className="flex-1 flex flex-col min-h-0">
+                      {/* Secure Sub-header */}
+                      <div className="bg-black/30 border-b border-white/5 px-4 py-2.5 flex items-center justify-between flex-wrap gap-2 text-[9px] font-mono">
+                        <div className="flex items-center gap-1.5">
+                          <ShieldCheck size={11} className="text-green-400 animate-pulse" />
+                          <span className="font-bold text-white uppercase">{activeRoom.name}</span>
+                          <span className="text-zinc-500 font-normal m-0 p-0 leading-none">
+                            &nbsp;&nbsp;|&nbsp;&nbsp;Owner ID: {activeRoom.owner.slice(0, 10)}
+                          </span>
+                        </div>
+                        
+                        {/* Member expansion append form for owner */}
+                        <div className="flex items-center gap-1.5 ml-auto">
+                          {isOwner ? (
+                            <div className="flex items-center gap-1 border border-white/10 bg-black/40 rounded px-1.5 py-0.5">
+                              <span className="text-fuchsia-400 tracking-wider">Whitelist UID:</span>
+                              <input
+                                type="text"
+                                placeholder="..."
+                                value={addMemberUid}
+                                onChange={(e) => setAddMemberUid(e.target.value)}
+                                className="bg-transparent border-none text-[8px] text-white p-0.5 focus:outline-none w-20 font-mono"
+                              />
+                              <button
+                                type="button"
+                                onClick={handleAddNewMember}
+                                className="text-fuchsia-500 hover:text-fuchsia-300 font-black cursor-pointer"
+                              >
+                                [ APPEND ]
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[8px] text-green-500 tracking-wider bg-green-500/10 px-1.5 py-0.5 border border-green-500/20 rounded uppercase">
+                              Read Write Access Authorized
+                            </span>
+                          )}
+
                           <button
-                            onClick={() => { navigator.clipboard.writeText(msg.content); setCopiedId(msg.id); setTimeout(() => setCopiedId(null), 2000); }}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity text-slate-600 hover:text-cyan-400 cursor-pointer"
+                            type="button"
+                            onClick={() => { setActiveRoomId(null); setRoomError(""); }}
+                            className="bg-zinc-950/45 hover:bg-zinc-900 border border-white/10 rounded px-1.5 py-0.5 font-bold hover:text-white text-zinc-500 cursor-pointer"
                           >
-                            {copiedId === msg.id ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
+                            DISCONNECT
                           </button>
-                        )}
+                        </div>
                       </div>
 
-                      <div className="font-sans leading-relaxed">
-                        {parseMarkdown(msg.content)}
-                      </div>
-
-                      {/* Grounding sources */}
-                      {msg.role === "assistant" && msg.groundingSources && msg.groundingSources.length > 0 && (
-                        <div className="mt-2.5 pt-2 border-t border-cyan-500/10 flex flex-wrap gap-1.5">
-                          {msg.groundingSources.map((s: any, i: number) => (
-                            <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
-                              className="text-[8px] font-mono px-1.5 py-0.5 border border-cyan-500/15 bg-cyan-950/20 text-cyan-400 rounded hover:border-cyan-400/40 transition-all truncate max-w-[160px]">
-                              ● {s.title}
-                            </a>
-                          ))}
+                      {roomError && (
+                        <div className="bg-red-950/20 border-b border-red-500/15 text-red-400 p-2 text-[9px] text-center font-mono">
+                          {roomError}
                         </div>
                       )}
+
+                      {/* Decrypted Messages viewport */}
+                      <div className="flex-1 overflow-y-auto scrollbar-none p-4 space-y-4 max-h-[55vh]">
+                        <AnimatePresence initial={false}>
+                          {(activeRoom.messages || []).map((msg: any, mIdx: number) => (
+                            <motion.div
+                              key={mIdx}
+                              initial={{ opacity: 0, y: 8 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              transition={{ duration: 0.15 }}
+                              className={`flex gap-2.5 ${msg.role === "user" ? "flex-row-reverse ml-auto max-w-[85%]" : "mr-auto max-w-[90%]"}`}
+                            >
+                              {/* Decrypted Shield indicator avatar */}
+                              <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                                msg.role === "user"
+                                  ? "border-fuchsia-500/30 bg-fuchsia-950/20 text-fuchsia-400"
+                                  : "border-green-500/20 bg-green-950/20 text-green-400"
+                              }`}>
+                                {msg.role === "user" ? <User size={12} /> : <ShieldCheck size={12} />}
+                              </div>
+
+                              {/* Bubble */}
+                              <div className={`p-3.5 rounded-xl border relative group ${
+                                msg.role === "user"
+                                  ? "bg-fuchsia-950/20 border-fuchsia-500/15 rounded-tr-sm"
+                                  : "bg-black/60 border-green-500/15 rounded-tl-sm"
+                              }`}>
+                                {/* Meta Header */}
+                                <div className="flex items-center justify-between gap-3 border-b border-white/5 pb-1.5 mb-2 font-mono">
+                                  <span className="text-[8px] text-zinc-500 uppercase tracking-widest font-bold">
+                                    {msg.sender || "DECRYPTED TERMINAL"} &bull; {msg.timestamp || "NOW"}
+                                  </span>
+                                  <span className="text-[7px] text-green-500 bg-green-500/10 px-1 rounded uppercase tracking-widest font-black">
+                                    SECURE
+                                  </span>
+                                </div>
+
+                                {/* Content text */}
+                                <p className="text-[11px] leading-relaxed text-zinc-100 whitespace-pre-wrap select-text selection:bg-fuchsia-500/30">
+                                  {msg.content}
+                                </p>
+                              </div>
+                            </motion.div>
+                          ))}
+                        </AnimatePresence>
+                        <div ref={chatEndRef} />
+                      </div>
                     </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-
-              {/* Typing indicator */}
-              {isTyping && (
-                <div className="flex gap-2.5 mr-auto items-center">
-                  <div className="w-7 h-7 rounded-lg border border-cyan-500/30 bg-cyan-950/20 flex items-center justify-center">
-                    <Loader2 size={12} className="animate-spin text-cyan-400" />
-                  </div>
-                  <div className="px-3 py-2 bg-black/60 border border-cyan-500/15 rounded-xl text-[9px] font-mono text-cyan-400 flex items-center gap-1.5">
-                    <Activity size={9} className="animate-pulse" /> PROCESSING NEURAL STREAM...
-                  </div>
-                </div>
-              )}
-
-              <div ref={chatEndRef} />
-            </div>
-
-            {/* Quick action buttons */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 px-4 pb-3 pt-2 border-t border-cyan-500/10 shrink-0">
-              {quickActions.map((action, idx) => (
-                <button
-                  key={idx}
-                  onClick={action.action}
-                  className="flex items-center gap-1.5 px-2.5 py-2 border border-cyan-500/15 bg-cyan-950/15 hover:bg-cyan-500/10 hover:border-cyan-400/35 text-cyan-400/80 hover:text-cyan-300 rounded-lg text-[8px] font-mono uppercase tracking-wide transition-all cursor-pointer"
-                >
-                  {action.icon}
-                  <span className="truncate">{action.label}</span>
-                </button>
-              ))}
-            </div>
+                  );
+                })()}
+              </div>
+            )}
 
             {/* File upload indicator */}
             {uploadedFile && (
@@ -683,10 +1133,15 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
               {/* Text input */}
               <input
                 type="text"
-                placeholder="Transmit commands or queries to JARVIS-X..."
+                placeholder={chatMode === "standard" ? "Transmit commands or queries to JARVIS-X..." : "Send AES-255 secure signal payload..."}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) handleSendMessage(); }}
+                onKeyDown={(e) => { 
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    if (chatMode === "standard") handleSendMessage();
+                    else handleSendSecureMessage();
+                  } 
+                }}
                 className="flex-1 bg-transparent border-none py-1.5 px-1 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-0 min-w-0 font-mono"
               />
 
@@ -701,8 +1156,14 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
               </button>
 
               {/* Send */}
-              <button type="button" onClick={() => handleSendMessage()}
-                className="p-2 bg-cyan-500 hover:bg-cyan-400 text-black rounded-xl transition-all shadow-[0_0_10px_rgba(6,182,212,0.3)] hover:shadow-[0_0_16px_rgba(6,182,212,0.5)] shrink-0 cursor-pointer">
+              <button 
+                type="button" 
+                onClick={() => {
+                  if (chatMode === "standard") handleSendMessage();
+                  else handleSendSecureMessage();
+                }}
+                className="p-2 bg-cyan-500 hover:bg-cyan-400 text-black rounded-xl transition-all shadow-[0_0_10px_rgba(6,182,212,0.3)] hover:shadow-[0_0_16px_rgba(6,182,212,0.5)] shrink-0 cursor-pointer"
+              >
                 <Send size={13} />
               </button>
             </div>

@@ -12,12 +12,29 @@
         "lastLogin": { "type": "string", "format": "date-time" }
       },
       "required": ["createdAt"]
+    },
+    "Chat": {
+      "title": "Secure Chat Room",
+      "description": "Encrypted secure room registry under active authorization",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "owner": { "type": "string" },
+        "members": { "type": "array" },
+        "messages": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "owner", "members", "messages", "createdAt"]
     }
   },
   "firestore": {
     "users/{userId}": {
       "schema": "User",
       "description": "User profiles collection"
+    },
+    "chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Secure chats registry"
     }
   }
 }

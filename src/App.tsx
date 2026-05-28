@@ -44,7 +44,10 @@ import {
   Mic,
   Loader2,
   Check,
-  Brain
+  Brain,
+  KeyRound,
+  ShieldAlert,
+  LogOut
 } from "lucide-react";
 
 import { PageId, NavigationItem, SystemLog } from "./types";
@@ -173,8 +176,10 @@ export const getProviderBigIcon = (provider: string) => {
   }
 };
 
-import { auth } from "./lib/firebase";
+import { auth, db } from "./lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import { doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
+import Admin from "./components/pages/Admin";
 
 // World-Class OS Multi-Theme Definition Matrix
 export const THEMES: Record<string, {
@@ -303,6 +308,11 @@ export default function App() {
   // Page routing
   const [activePage, setActivePage] = useState<PageId>("home");
 
+  // Access control states
+  const [currentUserData, setCurrentUserData] = useState<any>(null);
+  const [userRole, setUserRole] = useState<string>("guest");
+  const [isApproved, setIsApproved] = useState<boolean>(false);
+
   // Telemetry sequences
   const [booting, setBooting] = useState(true);
   const [bootProgress, setBootProgress] = useState(0);
@@ -387,18 +397,65 @@ export default function App() {
     return () => clearInterval(clockTimer);
   }, []);
 
-  // Sync Firebase Auth login state
+  // Sync Firebase Auth & Firestore live database status
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    let unsubscribeSnap: () => void = () => {};
+    
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      // Unsubscribe any previous session snapshot listener
+      unsubscribeSnap();
+      
       if (user) {
         const userNick = user.displayName || user.email?.split("@")[0].toUpperCase() || "AGENT";
         setCurrentCallsign(userNick);
         addTerminalLog("CORE", `Retinal fingerprint recognized: Captain ${userNick}`);
+
+        const userRef = doc(db, "users", user.uid);
+        
+        // Auto-promote Rudra (guptarudra852@gmail.com) to main admin role securely!
+        if (user.email === "guptarudra852@gmail.com") {
+          try {
+            await setDoc(userRef, {
+              email: "guptarudra852@gmail.com",
+              displayName: "RUDRA",
+              role: "admin",
+              approved: true,
+              lastLogin: serverTimestamp()
+            }, { merge: true });
+          } catch (e) {
+            console.error("Autopromote admin error: ", e);
+          }
+        }
+
+        // Live subscribe to active clearance state
+        unsubscribeSnap = onSnapshot(userRef, (snapshot) => {
+          if (snapshot.exists()) {
+            const data = snapshot.data();
+            setCurrentUserData(data);
+            setUserRole(data.role || "guest");
+            setIsApproved(data.approved ?? false);
+          } else {
+            // Unregistered user or just registered without doc yet
+            setCurrentUserData({ role: "guest", approved: false });
+            setUserRole("guest");
+            setIsApproved(false);
+          }
+        }, (err) => {
+          console.error("Firestore user sub error: ", err);
+        });
+
       } else {
         setCurrentCallsign(null);
+        setCurrentUserData(null);
+        setUserRole("guest");
+        setIsApproved(false);
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribeAuth();
+      unsubscribeSnap();
+    };
   }, []);
 
   // Holographic Boot-up load values
@@ -485,6 +542,117 @@ export default function App() {
     addTerminalLog("CORE", `Shifting operating neural colors to: ${themeId.replace("-", " ").toUpperCase()}`);
   };
 
+  const renderProtectedPage = (component: React.ReactNode, id: PageId) => {
+    // Admin is strictly restricted to userRole === "admin"
+    if (id === "admin") {
+      if (userRole !== "admin") {
+        return (
+          <div className="flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-lg mx-auto py-20 font-mono">
+            <div className="w-16 h-16 border border-red-500/30 bg-red-500/10 rounded-full flex items-center justify-center text-red-500 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-bold tracking-wider text-red-500 uppercase">ACCESS_DENIED_CORE_BREACH</h3>
+            <p className="text-xs text-zinc-400 leading-relaxed uppercase">
+              THIS ZONE IS RESTRICTED FROM GENERAL BIO-NODES. ADMINISTRATIVE KEY CARD SIGNATURE VERIFICATION FAILED.
+            </p>
+          </div>
+        );
+      }
+      return <Admin onLogMessage={addTerminalLog} />;
+    }
+
+    const publicPages = ["home", "features", "about", "voice", "pricing", "documentation", "blog", "contact", "login", "signup"];
+    const isPublic = publicPages.includes(id);
+
+    // If completely logged out, keep them from accessing restricted pages:
+    if (!isPublic && !auth.currentUser) {
+      return (
+        <div className="flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-md mx-auto py-20 font-mono">
+          <div className="w-16 h-16 border border-cyan-500/30 bg-cyan-950/20 rounded-full flex items-center justify-center text-cyan-400">
+            <Fingerprint className="w-8 h-8 animate-pulse" />
+          </div>
+          <h3 className="text-base font-bold tracking-wider text-white">RETI-SCAN GRIDS ENCRYPTED</h3>
+          <p className="text-xs text-zinc-450 leading-relaxed uppercase">
+            SIGNATURE UNVERIFIED. SECURING COGNITIVE THREADS. PLEASE AUTHENTICATE YOUR PROFILE CREDENTIALS TO LOAD THIS MAINFRAME NODE.
+          </p>
+          <button
+            onClick={() => handleNavigate("login")}
+            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl text-xs uppercase tracking-wider transition-colors cursor-pointer"
+          >
+            INITIALIZE AUTHENTICATION SECURE LINK
+          </button>
+        </div>
+      );
+    }
+
+    // If logged in, but approved is false:
+    if (!isPublic && !isApproved) {
+      return (
+        <div className="flex flex-col items-center justify-center text-center p-8 space-y-5 max-w-lg mx-auto py-24 font-mono bg-yellow-500/5 border border-yellow-500/10 rounded-2xl">
+          <div className="w-16 h-16 border border-yellow-500/30 bg-yellow-500/10 rounded-full flex items-center justify-center text-yellow-500 animate-pulse">
+            <ShieldAlert className="w-8 h-8" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold tracking-wider text-yellow-500 uppercase">AWAITING_BIOMETRIC_CLEARANCE</h3>
+            <p className="text-[10px] text-zinc-400 uppercase tracking-widest mt-1">Status: Registered / Under Evaluation</p>
+          </div>
+          <p className="text-xs text-zinc-305 leading-relaxed uppercase max-w-sm">
+            YOUR USER NODE HAS REGISTERED ON SECURE REGISTRY SNAPSHOTS, BUT REQUIRES SECURITY REVIEW BY MAINFRAME OPERATOR (RUDRA) BEFORE COGNITIVE GRID CLEARANCE IS CONFERRED.
+          </p>
+          <div className="w-full h-px bg-zinc-800" />
+          <div className="text-[10px] text-zinc-500 uppercase">
+            Captain ID signature: <span className="text-zinc-300 font-bold">{auth.currentUser?.uid}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // Guest Role restrictions on memory, agents/automation, computer gateway (vaultshield)
+    if (userRole === "guest") {
+      if (id === "memory") {
+        return (
+          <div className="flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-md mx-auto py-20 font-mono">
+            <div className="w-16 h-16 border border-zinc-500/30 bg-zinc-500/10 rounded-full flex items-center justify-center text-zinc-400">
+              <Database className="w-8 h-8" />
+            </div>
+            <h3 className="text-base font-bold tracking-wider text-zinc-400 uppercase">GUEST_MEMORY_ACCESS_RESTRICTED</h3>
+            <p className="text-xs text-zinc-400 leading-relaxed uppercase">
+              GUEST ROLES DO NOT SUPPORT EXPANDING QUANTUM NEURAL STORAGE REPLICAS. UPGRADE YOUR EMAIL PROFILE SIGNATURE MATRIX TO PROCEED.
+            </p>
+          </div>
+        );
+      }
+      if (id === "automation") {
+        return (
+          <div className="flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-md mx-auto py-20 font-mono">
+            <div className="w-16 h-16 border border-zinc-500/30 bg-zinc-500/10 rounded-full flex items-center justify-center text-zinc-400">
+              <Zap className="w-8 h-8" />
+            </div>
+            <h3 className="text-base font-bold tracking-wider text-zinc-400 uppercase">GUEST_AUTOMATION_RESTRICTED</h3>
+            <p className="text-xs text-zinc-400 leading-relaxed uppercase">
+              PIPELINES AND INTEGRATED ROUTINES EXCLUDED FOR ACTIVE UNAPPROVED GUEST SIGNATURES.
+            </p>
+          </div>
+        );
+      }
+      if (id === "vaultshield") {
+        return (
+          <div className="flex flex-col items-center justify-center text-center p-8 space-y-4 max-w-md mx-auto py-20 font-mono">
+            <div className="w-16 h-16 border border-zinc-500/30 bg-zinc-500/10 rounded-full flex items-center justify-center text-zinc-400">
+              <Shield className="w-8 h-8" />
+            </div>
+            <h3 className="text-base font-bold tracking-wider text-zinc-400 uppercase">GUEST_OPERATING_GATEWAY_BLOCKED</h3>
+            <p className="text-xs text-zinc-400 leading-relaxed uppercase">
+              VAULT DEVICE OVERLORD ACCESS DENIED FOR CURRENT SESSION SIGNATURE LEVEL.
+            </p>
+          </div>
+        );
+      }
+    }
+
+    return component;
+  };
+
   // Nav categories structure
   const navigationItems: NavigationItem[] = [
     { id: "home", label: "Core Home", iconName: "home", category: "core" },
@@ -510,6 +678,9 @@ export default function App() {
     { id: "login", label: "Auth Sign In", iconName: "login", category: "auth" },
     { id: "signup", label: "Build Account", iconName: "signup", category: "auth" },
     { id: "settings", label: "Core Settings", iconName: "settings", category: "auth" },
+    ...(userRole === "admin" ? [
+      { id: "admin" as PageId, label: "Admin Mainframe", iconName: "admin", category: "auth" as const }
+    ] : [])
   ];
 
   const renderIcon = (name: string, activeClass = "") => {
@@ -535,6 +706,7 @@ export default function App() {
       case "contact": return <Mail size={15} className={classProps} />;
       case "settings": return <Sliders size={15} className={classProps} />;
       case "vaultshield": return <Shield size={15} className={classProps} />;
+      case "admin": return <KeyRound size={15} className={classProps} />;
       default: return <Compass size={15} className={classProps} />;
     }
   };
@@ -786,6 +958,35 @@ export default function App() {
   // Sidebar expanded / collapsed calculations
   const isSidebarOpen = sidebarExpanded || (hoverExpandOption && isHoveringSidebar);
 
+  // Compulsory login: Show login/signup interface directly at start if unauthenticated
+  if (!booting && !auth.currentUser) {
+    return (
+      <div className={`${isLightMode ? "app-light bg-slate-50 text-slate-800" : "bg-[#020617] text-gray-100"} min-h-screen flex flex-col font-sans relative overflow-x-hidden ${currentTheme.bgClass} justify-center items-center p-6 select-none`}>
+        {/* Ambient glowing background grid pattern */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_40%,rgba(6,182,212,0.05),transparent_60%)] pointer-events-none" />
+        
+        <div className="w-full max-w-md relative z-10 space-y-4 animate-[fadeIn_0.4s_ease-out]">
+          <div className="text-center mb-2">
+            <h1 className="font-sans font-black tracking-widest text-3xl uppercase text-zinc-900 dark:text-white leading-none">
+              JARVIS <span className="text-[#DA7F5B]">X</span>
+            </h1>
+            <p className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest mt-1.5">
+              AUTONOMOUS INTELLIGENCE OPERATING PLATFORM
+            </p>
+          </div>
+          <LoginSignup 
+            onLogMessage={addTerminalLog} 
+            onLoginStatusChange={(userNick) => {
+              setCurrentCallsign(userNick);
+              setActivePage("home");
+            }} 
+            mode="login" 
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (!booting && workspaceLayout === "clean") {
     return (
       <div className="min-h-screen bg-[#FDFDFD] text-zinc-800 flex flex-col font-sans relative overflow-x-hidden select-none">
@@ -979,26 +1180,49 @@ export default function App() {
 
             </div>
 
-            {/* Bottom user index: RG / Papa - Free */}
+            {/* Bottom user index: Call sign & dynamic roles with logout */}
             <div className="border-t border-zinc-200 pt-3 flex items-center justify-between select-none">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-[#DA7F5B]/10 border border-[#DA7F5B]/20 flex items-center justify-center font-black text-[#DA7F5B] text-xs">
-                  RG
+                  {(currentCallsign || "CPT").slice(0, 2).toUpperCase()}
                 </div>
                 <div className="text-left font-sans leading-none">
-                  <span className="block text-xs font-bold text-zinc-800">Papa</span>
-                  <span className="text-[10px] text-zinc-400 font-semibold select-none">Free plan</span>
+                  <span className="block text-xs font-bold text-zinc-800 truncate max-w-[85px]" title={currentCallsign || "Captain"}>
+                    {currentCallsign || "Captain"}
+                  </span>
+                  <span className="text-[9px] text-[#DA7F5B] font-bold select-none uppercase tracking-wider block mt-0.5">
+                    {userRole}
+                  </span>
                 </div>
               </div>
               
-              {/* Reset/Download indices toggle */}
-              <button
-                onClick={handleClearCleanCache}
-                className="p-1.5 hover:bg-zinc-200/50 rounded-lg text-zinc-350 hover:text-red-500 transition-all cursor-pointer"
-                title="Flush Workspace Context Cache"
-              >
-                <Trash2 size={13} />
-              </button>
+              <div className="flex items-center gap-1">
+                {/* Reset/Download indices toggle */}
+                <button
+                  onClick={handleClearCleanCache}
+                  className="p-1.5 hover:bg-zinc-200/50 rounded-lg text-zinc-400 hover:text-amber-600 transition-all cursor-pointer"
+                  title="Flush Workspace Context Cache"
+                >
+                  <Trash2 size={13} />
+                </button>
+                
+                {/* Clean layout logout tool */}
+                <button
+                  onClick={async () => {
+                    try {
+                      const { logout } = await import("./lib/firebaseAuth");
+                      await logout();
+                      addTerminalLog("INFO", "Disassociated neural uplink completely. Logged out.");
+                    } catch (err: any) {
+                      addTerminalLog("ERROR", `Logout fail logic core: ${err.message}`);
+                    }
+                  }}
+                  className="p-1.5 hover:bg-zinc-200/50 rounded-lg text-zinc-400 hover:text-red-500 transition-all cursor-pointer"
+                  title="Disassociate Neural Uplink (Log Out)"
+                >
+                  <LogOut size={13} />
+                </button>
+              </div>
             </div>
           </aside>
 
@@ -1288,23 +1512,24 @@ export default function App() {
                 ) : (
                   /* 2. SPECIFIC SUBPAGE DISPATCHER container (styled clean light) */
                   <div className="h-full relative font-sans text-zinc-800 bg-[#FCFCFB] border border-zinc-200 rounded-2xl p-6 shadow-[0_4px_16px_rgba(0,0,0,0.01)] min-h-[70vh]">
-                    {activePage === "about" && <About />}
-                    {activePage === "features" && <Features />}
-                    {activePage === "dashboard" && <Dashboard />}
-                    {activePage === "search" && <JarvisSearch onLogMessage={addTerminalLog} />}
-                    {activePage === "memory" && <Memory onLogMessage={addTerminalLog} />}
-                    {activePage === "automation" && <Automation onLogMessage={addTerminalLog} />}
-                    {activePage === "integrations" && <Integrations onLogMessage={addTerminalLog} />}
-                    {activePage === "voice" && <Voice onLogMessage={addTerminalLog} />}
-                    {activePage === "analytics" && <Analytics onLogMessage={addTerminalLog} />}
-                    {activePage === "pricing" && <Pricing onNavigate={handleNavigate} />}
-                    {activePage === "documentation" && <Documentation />}
-                    {activePage === "blog" && <Blog />}
-                    {activePage === "login" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="login" />}
-                    {activePage === "signup" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />}
-                    {activePage === "contact" && <Contact onLogMessage={addTerminalLog} />}
-                    {activePage === "settings" && <Settings onLogMessage={addTerminalLog} />}
-                    {activePage === "vaultshield" && <ComputerControl onLogMessage={addTerminalLog} />}
+                    {activePage === "about" && renderProtectedPage(<About />, "about")}
+                    {activePage === "features" && renderProtectedPage(<Features />, "features")}
+                    {activePage === "dashboard" && renderProtectedPage(<Dashboard />, "dashboard")}
+                    {activePage === "search" && renderProtectedPage(<JarvisSearch onLogMessage={addTerminalLog} />, "search")}
+                    {activePage === "memory" && renderProtectedPage(<Memory onLogMessage={addTerminalLog} />, "memory")}
+                    {activePage === "automation" && renderProtectedPage(<Automation onLogMessage={addTerminalLog} />, "automation")}
+                    {activePage === "integrations" && renderProtectedPage(<Integrations onLogMessage={addTerminalLog} />, "integrations")}
+                    {activePage === "voice" && renderProtectedPage(<Voice onLogMessage={addTerminalLog} />, "voice")}
+                    {activePage === "analytics" && renderProtectedPage(<Analytics onLogMessage={addTerminalLog} />, "analytics")}
+                    {activePage === "pricing" && renderProtectedPage(<Pricing onNavigate={handleNavigate} />, "pricing")}
+                    {activePage === "documentation" && renderProtectedPage(<Documentation />, "documentation")}
+                    {activePage === "blog" && renderProtectedPage(<Blog />, "blog")}
+                    {activePage === "login" && renderProtectedPage(<LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="login" />, "login")}
+                    {activePage === "signup" && renderProtectedPage(<LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />, "signup")}
+                    {activePage === "contact" && renderProtectedPage(<Contact onLogMessage={addTerminalLog} />, "contact")}
+                    {activePage === "settings" && renderProtectedPage(<Settings onLogMessage={addTerminalLog} />, "settings")}
+                    {activePage === "vaultshield" && renderProtectedPage(<ComputerControl onLogMessage={addTerminalLog} />, "vaultshield")}
+                    {activePage === "admin" && renderProtectedPage(<Admin onLogMessage={addTerminalLog} />, "admin")}
                   </div>
                 )}
               </motion.div>
@@ -1645,15 +1870,30 @@ export default function App() {
                   <div className="space-y-1">
                     <button
                       onClick={() => { setProfileMenuOpen(false); handleNavigate("settings"); }}
-                      className="w-full text-left px-2 py-1 flex items-center gap-2 text-[9px] font-mono uppercase text-slate-300 hover:bg-white/5 rounded"
+                      className="w-full text-left px-2 py-1 flex items-center gap-2 text-[9px] font-mono uppercase text-slate-300 hover:bg-white/5 rounded cursor-pointer"
                     >
                       <Sliders size={10} /> Shift Settings
                     </button>
                     <button
                       onClick={() => { setProfileMenuOpen(false); handleNavigate("about"); }}
-                      className="w-full text-left px-2 py-1 flex items-center gap-2 text-[9px] font-mono uppercase text-slate-300 hover:bg-white/5 rounded"
+                      className="w-full text-left px-2 py-1 flex items-center gap-2 text-[9px] font-mono uppercase text-slate-300 hover:bg-white/5 rounded cursor-pointer"
                     >
                       <HelpCircle size={10} /> Core Manual
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setProfileMenuOpen(false);
+                        try {
+                          const { logout } = await import("./lib/firebaseAuth");
+                          await logout();
+                          addTerminalLog("INFO", "Disassociated neural uplink completely. Logged out.");
+                        } catch (err: any) {
+                          addTerminalLog("ERROR", `Logout failure: ${err.message}`);
+                        }
+                      }}
+                      className="w-full text-left px-2 py-1 flex items-center gap-2 text-[9px] font-mono uppercase text-red-400 hover:text-red-300 hover:bg-white/5 rounded cursor-pointer"
+                    >
+                      <LogOut size={10} /> Log out
                     </button>
                   </div>
                 </motion.div>
@@ -1833,25 +2073,26 @@ export default function App() {
                     soundEnabled={soundEnabled}
                   />
                 )}
-                {activePage === "about" && <About />}
-                {activePage === "features" && <Features />}
-                {activePage === "dashboard" && <Dashboard />}
-                {activePage === "cognition" && <Cognition />}
-                {activePage === "assistant" && <Assistant onLogMessage={addTerminalLog} onNavigate={handleNavigate} />}
-                {activePage === "search" && <JarvisSearch onLogMessage={addTerminalLog} />}
-                {activePage === "memory" && <Memory onLogMessage={addTerminalLog} />}
-                {activePage === "automation" && <Automation onLogMessage={addTerminalLog} />}
-                {activePage === "integrations" && <Integrations onLogMessage={addTerminalLog} />}
-                {activePage === "voice" && <Voice onLogMessage={addTerminalLog} />}
-                {activePage === "analytics" && <Analytics onLogMessage={addTerminalLog} />}
-                {activePage === "pricing" && <Pricing onNavigate={handleNavigate} />}
-                {activePage === "documentation" && <Documentation />}
-                {activePage === "blog" && <Blog />}
-                {activePage === "login" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="login" />}
-                {activePage === "signup" && <LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />}
-                {activePage === "contact" && <Contact onLogMessage={addTerminalLog} />}
-                {activePage === "settings" && <Settings onLogMessage={addTerminalLog} />}
-                {activePage === "vaultshield" && <ComputerControl onLogMessage={addTerminalLog} />}
+                {activePage === "about" && renderProtectedPage(<About />, "about")}
+                {activePage === "features" && renderProtectedPage(<Features />, "features")}
+                {activePage === "dashboard" && renderProtectedPage(<Dashboard />, "dashboard")}
+                {activePage === "cognition" && renderProtectedPage(<Cognition />, "cognition")}
+                {activePage === "assistant" && renderProtectedPage(<Assistant onLogMessage={addTerminalLog} onNavigate={handleNavigate} />, "assistant")}
+                {activePage === "search" && renderProtectedPage(<JarvisSearch onLogMessage={addTerminalLog} />, "search")}
+                {activePage === "memory" && renderProtectedPage(<Memory onLogMessage={addTerminalLog} />, "memory")}
+                {activePage === "automation" && renderProtectedPage(<Automation onLogMessage={addTerminalLog} />, "automation")}
+                {activePage === "integrations" && renderProtectedPage(<Integrations onLogMessage={addTerminalLog} />, "integrations")}
+                {activePage === "voice" && renderProtectedPage(<Voice onLogMessage={addTerminalLog} />, "voice")}
+                {activePage === "analytics" && renderProtectedPage(<Analytics onLogMessage={addTerminalLog} />, "analytics")}
+                {activePage === "pricing" && renderProtectedPage(<Pricing onNavigate={handleNavigate} />, "pricing")}
+                {activePage === "documentation" && renderProtectedPage(<Documentation />, "documentation")}
+                {activePage === "blog" && renderProtectedPage(<Blog />, "blog")}
+                {activePage === "login" && renderProtectedPage(<LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="login" />, "login")}
+                {activePage === "signup" && renderProtectedPage(<LoginSignup onLogMessage={addTerminalLog} onLoginStatusChange={setCurrentCallsign} mode="signup" />, "signup")}
+                {activePage === "contact" && renderProtectedPage(<Contact onLogMessage={addTerminalLog} />, "contact")}
+                {activePage === "settings" && renderProtectedPage(<Settings onLogMessage={addTerminalLog} />, "settings")}
+                {activePage === "vaultshield" && renderProtectedPage(<ComputerControl onLogMessage={addTerminalLog} />, "vaultshield")}
+                {activePage === "admin" && renderProtectedPage(<Admin onLogMessage={addTerminalLog} />, "admin")}
               </motion.div>
             </AnimatePresence>
           </div>

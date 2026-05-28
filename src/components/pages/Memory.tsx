@@ -1,10 +1,61 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2, LayoutGrid, Server } from "lucide-react";
-import * as ReactWindow from "react-window";
 import { MemoryCard } from "../../types";
 
-const List = (ReactWindow as any).FixedSizeList || (ReactWindow as any).default?.FixedSizeList;
+interface FixedSizeListProps {
+  height: number;
+  itemCount: number;
+  itemSize: number;
+  width?: string | number;
+  children: (props: { index: number; style: React.CSSProperties }) => React.ReactNode;
+}
+
+function List({ height, itemCount, itemSize, width = "100%", children }: FixedSizeListProps) {
+  const [scrollTop, setScrollTop] = useState(0);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  };
+
+  const totalHeight = itemCount * itemSize;
+  const startIndex = Math.max(0, Math.floor(scrollTop / itemSize) - 3);
+  const endIndex = Math.min(itemCount - 1, Math.floor((scrollTop + height) / itemSize) + 3);
+
+  const items = [];
+  for (let i = startIndex; i <= endIndex; i++) {
+    const rendered = children({
+      index: i,
+      style: {
+        position: "absolute",
+        top: i * itemSize,
+        left: 0,
+        right: 0,
+        height: itemSize,
+      },
+    });
+    if (rendered) {
+      items.push(rendered);
+    }
+  }
+
+  return (
+    <div
+      onScroll={handleScroll}
+      style={{
+        overflowY: "auto",
+        position: "relative",
+        height,
+        width,
+      }}
+      className="scrollbar-thin scrollbar-thumb-cyan-500/10 scrollbar-track-transparent"
+    >
+      <div style={{ height: totalHeight, width: "100%", position: "relative" }}>
+        {items}
+      </div>
+    </div>
+  );
+}
 
 interface MemoryProps {
   onLogMessage: (level: "INFO" | "WARN" | "CORE" | "ERROR", text: string) => void;
@@ -457,7 +508,7 @@ export default function Memory({ onLogMessage }: MemoryProps) {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-center justify-between h-full bg-black/45 hover:bg-cyan-950/15 border border-cyan-500/10 hover:border-cyan-400/30 rounded-lg px-3 transition-all group relative overflow-hidden">
+                    <div className="flex items-center justify-between h-full bg-black/45 hover:bg-cyan-950/15 border border-cyan-500/10 hover:border-cyan-400/30 rounded-lg px-3 transition-all group relative overflow-hidden animate-[fadeIn_0.2s_ease-out]">
                       <div className="flex items-center gap-3 truncate mr-8">
                         <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0 shadow-[0_0_8px_rgba(6,182,212,0.8)]"></span>
                         <div className="truncate">
@@ -505,13 +556,23 @@ export default function Memory({ onLogMessage }: MemoryProps) {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {sortedMemories.map((mem) => {
-            const isEditing = isEditingId === mem.id;
-            return (
-              <div
-                key={mem.id}
-                className="p-5 bg-black/45 border border-cyan-500/15 hover:border-cyan-500/30 rounded-xl backdrop-blur-md relative overflow-hidden group transition-all"
-              >
+          <AnimatePresence mode="popLayout">
+            {sortedMemories.map((mem, index) => {
+              const isEditing = isEditingId === mem.id;
+              return (
+                <motion.div
+                  key={mem.id}
+                  initial={{ opacity: 0, y: 30 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ 
+                    duration: 0.45, 
+                    ease: "easeOut",
+                    delay: Math.min(index * 0.04, 0.4) 
+                  }}
+                  layout
+                  className="p-5 bg-black/45 border border-cyan-500/15 hover:border-cyan-500/30 rounded-xl backdrop-blur-md relative overflow-hidden group transition-all"
+                >
                 {isEditing ? (
                   // Editing view inside the card
                   <div className="space-y-4">
@@ -649,9 +710,10 @@ export default function Memory({ onLogMessage }: MemoryProps) {
                     </div>
                   </>
                 )}
-              </div>
+              </motion.div>
             );
           })}
+          </AnimatePresence>
 
           {sortedMemories.length === 0 && (
             <div className="md:col-span-2 text-center py-12 border border-cyan-500/10 rounded-xl font-mono text-xs text-gray-500">
