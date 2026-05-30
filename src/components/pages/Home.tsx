@@ -25,6 +25,7 @@ import {
   Check
 } from "lucide-react";
 import { PageId } from "../../types";
+import { safeLocalStorage } from "../../utils/safeLocalStorage";
 
 interface HomeProps {
   onNavigate: (page: PageId) => void;
@@ -128,7 +129,7 @@ export default function Home({
     const fetchChatHistoryBackup = async () => {
       onLogMessage("INFO", "Initializing synaptic chat backup links...");
       // Try local storage first
-      const savedMessages = localStorage.getItem("jarvis_home_chat");
+      const savedMessages = safeLocalStorage.getItem("jarvis_home_chat");
       if (savedMessages) {
         try {
           const parsed = JSON.parse(savedMessages);
@@ -147,7 +148,7 @@ export default function Home({
           const data = await res.json();
           if (data && Array.isArray(data.messages) && data.messages.length > 0) {
             setChatMessages(data.messages);
-            localStorage.setItem("jarvis_home_chat", JSON.stringify(data.messages));
+            safeLocalStorage.setItem("jarvis_home_chat", JSON.stringify(data.messages));
             onLogMessage("INFO", "Latest central chat archives compiled beautifully.");
           }
         }
@@ -161,7 +162,7 @@ export default function Home({
   // Update localStorage when messages change
   useEffect(() => {
     if (chatMessages.length > 1) { // ignore initial layout mount state
-      localStorage.setItem("jarvis_home_chat", JSON.stringify(chatMessages));
+      safeLocalStorage.setItem("jarvis_home_chat", JSON.stringify(chatMessages));
       setBackupStatus("dirty");
     }
   }, [chatMessages]);
@@ -259,7 +260,7 @@ export default function Home({
       }
     ];
     setChatMessages(initial);
-    localStorage.removeItem("jarvis_home_chat");
+    safeLocalStorage.removeItem("jarvis_home_chat");
     setBackupStatus("clean");
     onLogMessage("WARN", "Home conversational stack cleared.");
   };

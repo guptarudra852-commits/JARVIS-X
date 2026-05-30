@@ -3,6 +3,7 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { Icosahedron, OrbitControls, Points, PointMaterial } from '@react-three/drei';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
+import { safeLocalStorage } from '../utils/safeLocalStorage';
 
 // Constellation of floating neural nodes
 function FloatingStars({ count = 180, themeColor = '#06b6d4' }) {
@@ -147,7 +148,7 @@ export default function ThreeCanvas() {
   // Real-time listener checking for active theme shifts immediately
   useEffect(() => {
     const updateCanvasColors = () => {
-      const activeTheme = localStorage.getItem("jarvis_active_theme") || "cyber-blue";
+      const activeTheme = safeLocalStorage.getItem("jarvis_active_theme") || "cyber-blue";
       if (activeTheme === 'neon-purple') {
         setThemeColor('#d946ef');
       } else if (activeTheme === 'red-tactical') {

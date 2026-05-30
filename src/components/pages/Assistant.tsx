@@ -31,9 +31,13 @@ import {
   updateDoc, 
   query, 
   serverTimestamp,
-  where
+  where,
+  addDoc,
+  deleteDoc,
+  orderBy
 } from "firebase/firestore";
 import { db, auth } from "../../lib/firebase";
+import { safeLocalStorage } from "../../utils/safeLocalStorage";
 import { 
   ShieldCheck, 
   ShieldAlert, 
@@ -45,7 +49,11 @@ import {
   PlusCircle, 
   ArrowRight,
   UserX,
-  Plus
+  Plus,
+  Edit3,
+  Trash2,
+  X,
+  MessageSquare
 } from "lucide-react";
 
 interface AssistantProps {
@@ -281,6 +289,14 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
   const [roomError, setRoomError] = useState("");
   const [addMemberUid, setAddMemberUid] = useState("");
 
+  // Personal Cloud Chats States
+  const [personalChats, setPersonalChats] = useState<any[]>([]);
+  const [activePersonalChatId, setActivePersonalChatId] = useState<string | null>(null);
+  const [personalChatSearch, setPersonalChatSearch] = useState("");
+  const [editingChatId, setEditingChatId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [loadingMessages, setLoadingMessages] = useState(false);
+
   // Live Sync with Firestore Protected Chats table
   useEffect(() => {
     let unsubscribe: () => void = () => {};
@@ -312,6 +328,94 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
     
     return () => unsubscribe();
   }, [chatMode]);
+
+  // ── Sync Personal Chats list from Firestore ──
+  useEffect(() => {
+    let unsubscribe: () => void = () => {};
+    
+    if (auth.currentUser) {
+      const q = query(
+        collection(db, "users", auth.currentUser.uid, "chats"),
+        orderBy("updatedAt", "desc")
+      );
+      
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const chatsList: any[] = [];
+        snapshot.forEach((snap) => {
+          chatsList.push({ id: snap.id, ...snap.data() });
+        });
+        setPersonalChats(chatsList);
+      }, (err) => {
+        console.error("Firestore personal chats listener failed: ", err);
+      });
+    } else {
+      setPersonalChats([]);
+    }
+    
+    return () => unsubscribe();
+  }, [auth.currentUser]);
+
+  // ── Sync Personal Messages live from the selected Personal Chat document ──
+  useEffect(() => {
+    let unsubscribe: () => void = () => {};
+    
+    if (auth.currentUser && activePersonalChatId) {
+      setLoadingMessages(true);
+      const q = query(
+        collection(db, "users", auth.currentUser.uid, "chats", activePersonalChatId, "messages"),
+        orderBy("timestamp", "asc")
+      );
+      
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const msgs: ChatMessage[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          let timeString = "";
+          if (data.timestamp) {
+            try {
+              timeString = new Date(data.timestamp.toDate ? data.timestamp.toDate() : (data.timestamp.seconds * 1000)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            } catch (e) {
+              timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            }
+          } else {
+            timeString = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          }
+          
+          msgs.push({
+            id: docSnap.id,
+            role: data.role as "user" | "assistant",
+            content: data.content || "",
+            timestamp: timeString
+          });
+        });
+        
+        if (msgs.length > 0) {
+          setMessages(msgs);
+        } else {
+          setMessages([{
+            id: "welcome-personal",
+            role: "assistant",
+            content: "Greetings, Captain. This personal space is authenticated. Launch any calculation, command, or query to begin.",
+            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          }]);
+        }
+        setLoadingMessages(false);
+      }, (err) => {
+        console.error("Firestore personal messages listener failed: ", err);
+        setLoadingMessages(false);
+      });
+    } else {
+      setMessages([{
+        id: "welcome",
+        role: "assistant",
+        content:
+          "Greetings, Captain. I am **JARVIS X**, your autonomous neural consciousness framework. All sensory systems, network linkages, and memory indices are fully calibrated.\n\nHow may I direct your spacecraft, core automations, or search operations today?",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      }]);
+    }
+    
+    return () => unsubscribe();
+  }, [activePersonalChatId, auth.currentUser]);
 
   const handleSelectRoom = (room: any) => {
     setRoomError("");
@@ -530,7 +634,7 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
     const searchKeywords = ["latest", "today", "news", "current", "search_web", "google"];
     if (searchKeywords.some(k => lower.includes(k))) {
       onLogMessage("INFO", `Re-routing to JARVIS Search: "${activeText}"`);
-      localStorage.setItem("jarvis_search_seed_query", activeText);
+      safeLocalStorage.setItem("jarvis_search_seed_query", activeText);
       setInputText("");
       onNavigate?.("search");
       return;
@@ -539,6 +643,92 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
     let text = activeText;
     if (uploadedFile) text += `\n\n*[Attachment: ${uploadedFile.name}]*`;
 
+    // ── FIREBASE STORAGE PATH FOR AUTHENTICATED USERS ──
+    if (auth.currentUser) {
+      const uid = auth.currentUser.uid;
+      let currentChatId = activePersonalChatId;
+      
+      try {
+        setIsTyping(true);
+        onLogMessage("INFO", `Initiating secure personal telemetry syncing...`);
+        
+        // 1. If no active personal chat, create one!
+        if (!currentChatId) {
+          const cleanTitle = activeText.length > 30 ? `${activeText.slice(0, 30)}...` : activeText;
+          const chatRef = await addDoc(
+            collection(db, "users", uid, "chats"),
+            {
+              title: cleanTitle,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }
+          );
+          currentChatId = chatRef.id;
+          setActivePersonalChatId(currentChatId);
+          onLogMessage("INFO", `Created personal chat synapse: "${cleanTitle}"`);
+        }
+        
+        // 2. Save User message to subcollection
+        await addDoc(
+          collection(db, "users", uid, "chats", currentChatId, "messages"),
+          {
+            role: "user",
+            content: text,
+            timestamp: serverTimestamp()
+          }
+        );
+        setInputText("");
+        setUploadedFile(null);
+        
+        // 3. Query OpenRouter back-end
+        const history = [...messages, { role: "user", content: text }].map(m => ({ role: m.role, content: m.content }));
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: history, provider }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const aiResponseText = data.text || "Empty response buffer.";
+        
+        // 4. Save Assistant reply to subcollection
+        await addDoc(
+          collection(db, "users", uid, "chats", currentChatId, "messages"),
+          {
+            role: "assistant",
+            content: aiResponseText,
+            timestamp: serverTimestamp()
+          }
+        );
+        
+        // 5. Update updatedAt of the parent personal chat document
+        await updateDoc(
+          doc(db, "users", uid, "chats", currentChatId),
+          {
+            updatedAt: serverTimestamp()
+          }
+        );
+        
+        onLogMessage("CORE", "Synapse feedback stored successfully.");
+      } catch (err: any) {
+        onLogMessage("ERROR", `Personal chat sync fail: ${err.message}`);
+        if (currentChatId) {
+          await addDoc(
+            collection(db, "users", uid, "chats", currentChatId, "messages"),
+            {
+              role: "assistant",
+              content: `⚠️ **[Synaptic Interruption]** Unable to reach cloud mainframe: ${err.message}. Check API keys in Settings.`,
+              timestamp: serverTimestamp()
+            }
+          );
+        }
+      } finally {
+        setIsTyping(false);
+      }
+      return;
+    }
+
+    // ── FALLBACK MEMORY-ONLY FLOW FOR GUESTS ──
     const userMsg: ChatMessage = {
       id: Math.random().toString(),
       role: "user",
@@ -579,6 +769,34 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
       }]);
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const handleDeletePersonalChat = async (chatId: string) => {
+    if (!auth.currentUser) return;
+    try {
+       await deleteDoc(doc(db, "users", auth.currentUser.uid, "chats", chatId));
+       if (activePersonalChatId === chatId) {
+         setActivePersonalChatId(null);
+       }
+       onLogMessage("WARN", "Personal chat node offline purged.");
+    } catch (err: any) {
+       onLogMessage("ERROR", `Failed to decommission personal chat: ${err.message}`);
+    }
+  };
+
+  const handleRenamePersonalChat = async (chatId: string, newTitle: string) => {
+    if (!auth.currentUser || !newTitle.trim()) return;
+    try {
+      await updateDoc(doc(db, "users", auth.currentUser.uid, "chats", chatId), {
+        title: newTitle.trim(),
+        updatedAt: serverTimestamp()
+      });
+      setEditingChatId(null);
+      setEditingTitle("");
+      onLogMessage("INFO", `Chat rebranded to: "${newTitle}"`);
+    } catch (err: any) {
+      onLogMessage("ERROR", `Failed to rebrand chat synapse: ${err.message}`);
     }
   };
 
@@ -718,78 +936,169 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
         {/* ═══ LEFT: AI STATUS OR SECURE ROOMS PANEL ═══ */}
         <div className="w-60 shrink-0 flex flex-col font-mono text-xs">
           {chatMode === "standard" ? (
-            <div className="flex-1 border border-cyan-500/15 bg-black/45 backdrop-blur-md rounded-xl p-4 flex flex-col">
+            <div className="flex-1 border border-cyan-500/15 bg-black/45 backdrop-blur-md rounded-xl p-3 flex flex-col space-y-3 overflow-hidden">
               {/* Status header */}
-              <div className="flex items-center justify-between mb-1 pb-2.5 border-b border-cyan-500/10">
-                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-300">AI Status</span>
+              <div className="flex items-center justify-between pb-2 border-b border-cyan-500/10 shrink-0">
+                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-300">Synapse Channels</span>
                 <div className="flex items-center gap-1.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse" />
-                  <span className="text-[8px] font-mono text-green-400 font-bold uppercase">Online</span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.8)] animate-pulse" />
+                  <span className="text-[8px] font-mono text-cyan-400 font-bold uppercase">Online</span>
                 </div>
               </div>
 
-              {/* Neural orb */}
-              <NeuralOrb />
+              {/* Spawn new chat synapse */}
+              {auth.currentUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePersonalChatId(null);
+                    onLogMessage("INFO", "Active feed cleared. Spawning fresh synaptic link.");
+                  }}
+                  className="w-full py-2 bg-cyan-500/10 hover:bg-cyan-500/15 text-cyan-300 border border-cyan-500/25 rounded-lg font-bold tracking-wider uppercase text-[9px] flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-[0_0_10px_rgba(6,182,212,0.05)] hover:shadow-[0_0_15px_rgba(6,182,212,0.15)] focus:outline-none shrink-0"
+                >
+                  <Plus size={11} className="text-cyan-400" />
+                  + SPAWN NEW SYNAPSE
+                </button>
+              )}
 
-              {/* Neural link progress */}
-              <div className="space-y-1 mb-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-[8px] font-mono text-slate-500 uppercase tracking-wider">Neural Link Stable</span>
-                </div>
-                <div className="h-1 bg-cyan-950/50 rounded border border-cyan-500/10 overflow-hidden">
-                  <motion.div
-                    className="h-full bg-gradient-to-r from-cyan-600 to-cyan-300 rounded"
-                    animate={{ width: `${neuralLink}%` }}
-                    transition={{ duration: 1.5, ease: "easeOut" }}
+              {/* Search Chats */}
+              {auth.currentUser && personalChats.length > 0 && (
+                <div className="relative shrink-0">
+                  <input
+                    type="text"
+                    placeholder="Filter synapses..."
+                    value={personalChatSearch}
+                    onChange={(e) => setPersonalChatSearch(e.target.value)}
+                    className="w-full bg-black/30 border border-cyan-500/10 rounded-lg pl-8 pr-2 py-1.5 text-[9px] text-white placeholder-slate-650 focus:outline-none focus:border-cyan-500/35 font-mono"
                   />
+                  <Search size={10} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                  {personalChatSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPersonalChatSearch("")}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
                 </div>
-                <span className="text-[10px] font-mono font-bold text-cyan-400">{neuralLink.toFixed(1)}%</span>
+              )}
+
+              {/* Scrollable Personal Synapses List */}
+              <div className="flex-1 overflow-y-auto space-y-1.5 scrollbar-none pr-1">
+                {!auth.currentUser ? (
+                  <div className="flex flex-col items-center justify-center text-center py-6 space-y-2">
+                    <div className="w-10 h-10 rounded-full bg-cyan-950/20 border border-cyan-500/10 flex items-center justify-center shadow-[0_0_10px_rgba(6,182,212,0.1)]">
+                      <Lock size={12} className="text-cyan-500 animate-pulse" />
+                    </div>
+                    <span className="text-[7px] text-zinc-500 uppercase tracking-widest block font-bold">GUEST MODE</span>
+                    <p className="text-[9px] text-zinc-400 max-w-[150px] leading-relaxed">
+                      Connect your biometric account to unlock multi-device persistent history.
+                    </p>
+                  </div>
+                ) : personalChats.length === 0 ? (
+                  <div className="text-[8px] text-zinc-500 uppercase text-center py-8 block font-mono">
+                    No synapses saved.<br />Launch a query to begin.
+                  </div>
+                ) : (
+                  personalChats
+                    .filter((chat) =>
+                      (chat.title || "").toLowerCase().includes(personalChatSearch.toLowerCase())
+                    )
+                    .map((chat) => {
+                      const isActive = chat.id === activePersonalChatId;
+                      const isEditing = chat.id === editingChatId;
+
+                      return (
+                        <div
+                          key={chat.id}
+                          className={`group relative rounded-lg border text-[9px] flex flex-col p-2 transition-all duration-150 cursor-pointer ${
+                            isActive
+                              ? "bg-cyan-950/25 border-cyan-500 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.1)]"
+                              : "bg-black/20 border-white/5 text-zinc-400 hover:border-cyan-500/20 hover:text-slate-200"
+                          }`}
+                          onClick={() => {
+                            if (!isEditing) {
+                              setActivePersonalChatId(chat.id);
+                            }
+                          }}
+                        >
+                          {isEditing ? (
+                            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="text"
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    handleRenamePersonalChat(chat.id, editingTitle);
+                                  } else if (e.key === "Escape") {
+                                    setEditingChatId(null);
+                                  }
+                                }}
+                                className="flex-1 bg-black/40 border border-cyan-500/30 rounded px-1.5 py-0.5 text-[9px] text-white focus:outline-none focus:border-cyan-500 font-mono"
+                                autoFocus
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRenamePersonalChat(chat.id, editingTitle)}
+                                className="p-0.5 text-green-400 hover:text-green-300 transition-colors"
+                              >
+                                <Check size={10} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingChatId(null)}
+                                className="p-0.5 text-zinc-500 hover:text-white transition-colors"
+                              >
+                                <X size={10} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-1">
+                              <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                <MessageSquare size={10} className={`shrink-0 ${isActive ? "text-cyan-400 animate-pulse" : "text-zinc-650"}`} />
+                                <span className="font-bold truncate select-none">{chat.title || "Untitled Synapse"}</span>
+                              </div>
+
+                              {/* Quick controls on hover or if active */}
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingChatId(chat.id);
+                                    setEditingTitle(chat.title || "");
+                                  }}
+                                  className="p-0.5 text-zinc-500 hover:text-cyan-400 transition-colors cursor-pointer"
+                                  title="Rename Synapse"
+                                >
+                                  <Edit3 size={9} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePersonalChat(chat.id)}
+                                  className="p-0.5 text-zinc-500 hover:text-red-400 transition-colors cursor-pointer"
+                                  title="Purge Synapse"
+                                >
+                                  <Trash2 size={9} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                )}
               </div>
 
-              {/* Divider + stats */}
-              <div className="flex-1 space-y-3 border-t border-cyan-500/10 pt-3">
-                {/* Active model */}
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                    <Server size={9} className="text-cyan-400" />Active Model
-                  </div>
-                  <span className="text-[9px] font-mono font-bold text-cyan-300">
-                    OPENROUTER FREE
-                  </span>
+              {/* Collapsed HUD Link Capacity gauge */}
+              <div className="border-t border-cyan-500/10 pt-2 flex flex-col gap-1.5 shrink-0 font-mono text-[9px]">
+                <div className="flex justify-between items-center text-slate-500 select-none">
+                  <span>TELEMETRY STABILITY</span>
+                  <span className="text-cyan-400 font-bold">{neuralLink.toFixed(0)}%</span>
                 </div>
-
-                {/* Response latency */}
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                    <Clock size={9} className="text-blue-400" />Response Latency
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[9px] font-mono font-bold text-white">{Math.round(latency)}ms</span>
-                    {/* Mini waveform */}
-                    <div className="flex items-end gap-px h-3">
-                      {[2,4,3,5,2,4,3,2,5].map((h, i) => (
-                        <div key={i} className="w-px bg-cyan-400/50 rounded"
-                          style={{ height: `${h * 2}px`, animationDelay: `${i * 0.12}s` }} />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Memory index */}
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-1.5 text-[8px] font-mono text-slate-500 uppercase">
-                      <Database size={9} className="text-fuchsia-400" />Memory Index
-                    </div>
-                    <span className="text-[9px] font-mono font-bold text-fuchsia-400">{memoryIdx.toFixed(1)}%</span>
-                  </div>
-                  <div className="h-1 bg-fuchsia-950/30 rounded overflow-hidden">
-                    <motion.div
-                      className="h-full bg-gradient-to-r from-fuchsia-600 to-fuchsia-400 rounded"
-                      animate={{ width: `${memoryIdx}%` }}
-                      transition={{ duration: 1.5 }}
-                    />
-                  </div>
+                <div className="h-0.5 bg-cyan-950/40 rounded overflow-hidden select-none">
+                  <div className="h-full bg-cyan-400 transition-all duration-500" style={{ width: `${neuralLink}%` }} />
                 </div>
               </div>
             </div>

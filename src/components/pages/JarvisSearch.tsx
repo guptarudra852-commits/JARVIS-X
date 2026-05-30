@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 
 import HolographicEarth from "../HolographicEarth";
+import { safeLocalStorage } from "../../utils/safeLocalStorage";
 
 interface SearchSource {
   title: string;
@@ -70,11 +71,11 @@ export default function JarvisSearch({ onLogMessage }: JarvisSearchProps) {
   // Results states
   const [searchOutput, setSearchOutput] = useState<any | null>(null);
   const [searchHistory, setSearchHistory] = useState<SearchHistoryItem[]>(() => {
-    const saved = localStorage.getItem("jarvis_search_history");
+    const saved = safeLocalStorage.getItem("jarvis_search_history");
     return saved ? JSON.parse(saved) : [];
   });
   const [bookmarkedItems, setBookmarkedItems] = useState<string[]>(() => {
-    const saved = localStorage.getItem("jarvis_search_bookmarks");
+    const saved = safeLocalStorage.getItem("jarvis_search_bookmarks");
     return saved ? JSON.parse(saved) : [];
   });
 
@@ -125,13 +126,13 @@ export default function JarvisSearch({ onLogMessage }: JarvisSearchProps) {
   // Save history to localstorage
   const saveSearchHistory = (updated: SearchHistoryItem[]) => {
     setSearchHistory(updated);
-    localStorage.setItem("jarvis_search_history", JSON.stringify(updated));
+    safeLocalStorage.setItem("jarvis_search_history", JSON.stringify(updated));
   };
 
   // Save bookmarks to localstorage
   const saveBookmarks = (updated: string[]) => {
     setBookmarkedItems(updated);
-    localStorage.setItem("jarvis_search_bookmarks", JSON.stringify(updated));
+    safeLocalStorage.setItem("jarvis_search_bookmarks", JSON.stringify(updated));
   };
 
   // Quick chips search click

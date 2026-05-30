@@ -2,72 +2,163 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helpers
-    function isSignedIn() { return request.auth != null; }
-    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+
+    // =========================
+    // Helper Functions
+    // =========================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string &&
+             id.size() <= 128 &&
+             id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isAdmin() {
-      return isSignedIn() && 
+      return isSignedIn() &&
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin";
     }
-    
+
+    function isValidCredits(data) {
+      return data.credits is int &&
+             data.credits >= 0 &&
+             data.credits <= 5000;
+    }
+
     function isValidUser(data) {
-      return (data.email is string && (data.email == "" || (data.email.size() <= 254 && data.email.matches('^[^@]+@[^@]+\\.[^@]+$')))) &&
+      return (data.email is string && data.email.size() <= 254) &&
              (data.displayName == null || (data.displayName is string && data.displayName.size() <= 100)) &&
              (data.phoneNumber == null || (data.phoneNumber is string && data.phoneNumber.size() <= 30)) &&
              (data.role == null || (data.role is string && data.role.size() <= 50)) &&
              (data.approved == null || data.approved is bool) &&
+             (data.credits == null || isValidCredits(data)) &&
+             (data.lastCreditReset == null || (data.lastCreditReset is string && data.lastCreditReset.size() <= 20)) &&
              (data.createdAt == null || data.createdAt is timestamp) &&
              (data.lastLogin == null || data.lastLogin is timestamp);
     }
-    
+
     function isValidChat(data) {
-      return data.name is string && data.name.size() <= 100 &&
-             data.owner is string && data.owner.size() <= 128 && data.owner == request.auth.uid &&
-             data.members is list && data.members.size() <= 100 &&
-             data.messages is list && data.messages.size() <= 1000 &&
+      return data.name is string &&
+             data.name.size() <= 100 &&
+             data.owner is string &&
+             data.owner == request.auth.uid &&
+             data.members is list &&
+             data.members.size() <= 100 &&
+             data.messages is list &&
+             data.messages.size() <= 1000 &&
              data.createdAt is timestamp;
     }
-    
-    // Catch-all deny
+
+    // =========================
+    // Default Deny
+    // =========================
+
     match /{document=**} {
       allow read, write: if false;
     }
-    
-    // Chats collection
-    match /chats/{chatId} {
-      allow read: if isSignedIn() && (resource.data.owner == request.auth.uid || request.auth.uid in resource.data.members);
-      allow create: if isSignedIn() && isValidId(chatId) &&
-                       isValidChat(request.resource.data) &&
-                       request.resource.data.createdAt == request.time;
-      allow update: if isSignedIn() && isValidId(chatId) &&
-                       (resource.data.owner == request.auth.uid || request.auth.uid in resource.data.members) &&
-                       request.resource.data.owner == resource.data.owner &&
-                       request.resource.data.createdAt == resource.data.createdAt &&
-                       (
-                         // Action 1: Add member (owner only)
-                         (request.resource.data.members.size() > resource.data.members.size() && 
-                          resource.data.owner == request.auth.uid &&
-                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])) ||
-                         
-                         // Action 2: Send message
-                         (request.resource.data.messages.size() > resource.data.messages.size() &&
-                          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['messages']))
-                       );
-    }
-    
-    // Users collection
+
+    // =========================
+    // Users Collection
+    // =========================
+
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
-      allow create: if isSignedIn() && request.auth.uid == userId && 
+
+      // Read own profile or admin
+      allow read: if isSignedIn() &&
+                     (request.auth.uid == userId ||
+                      isAdmin());
+
+      // Create account
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
                        isValidUser(request.resource.data);
+
+      // User updates own profile
       allow update: if isSignedIn() && (
-                       (request.auth.uid == userId &&
-                        request.resource.data.email == resource.data.email &&
-                        (resource.data.role == null || request.resource.data.role == resource.data.role) &&
-                        (resource.data.approved == null || request.resource.data.approved == resource.data.approved)) ||
-                       isAdmin()
-                     );
+        (
+          request.auth.uid == userId &&
+
+          // Email cannot change
+          request.resource.data.email ==
+          resource.data.email &&
+
+          // Credits cannot change
+          request.resource.data.credits ==
+          resource.data.credits &&
+
+          // Role cannot change
+          request.resource.data.role ==
+          resource.data.role &&
+
+          // Approval cannot change
+          request.resource.data.approved ==
+          resource.data.approved &&
+
+          // Daily reset field cannot change
+          request.resource.data.lastCreditReset ==
+          resource.data.lastCreditReset
+        )
+        ||
+        // Admin can update everything
+        isAdmin()
+      );
+
+      // Delete only by admin
+      allow delete: if isAdmin();
+
+      // Nested chats and messages subcollections
+      match /chats/{chatId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+
+        match /messages/{messageId} {
+          allow read, write: if isSignedIn() && request.auth.uid == userId;
+        }
+      }
+    }
+
+    // =========================
+    // Chats Collection
+    // =========================
+
+    match /chats/{chatId} {
+
+      // Read chat
+      allow read: if isSignedIn() &&
+        (
+          resource.data.owner == request.auth.uid ||
+          request.auth.uid in resource.data.members
+        );
+
+      // Create chat
+      allow create: if isSignedIn() &&
+                        isValidId(chatId) &&
+                        isValidChat(request.resource.data) &&
+                        request.resource.data.createdAt ==
+                        request.time;
+
+      // Update chat
+      allow update: if isSignedIn() &&
+                       (
+                         resource.data.owner ==
+                         request.auth.uid ||
+
+                         request.auth.uid in
+                         resource.data.members
+                       ) &&
+
+                       request.resource.data.owner ==
+                       resource.data.owner &&
+
+                       request.resource.data.createdAt ==
+                       resource.data.createdAt;
+
+      // Delete chat
+      allow delete: if resource.data.owner ==
+                        request.auth.uid ||
+                        isAdmin();
     }
   }
 }

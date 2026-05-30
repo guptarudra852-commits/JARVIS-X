@@ -8,6 +8,10 @@
         "email": { "type": "string" },
         "phoneNumber": { "type": "string" },
         "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["guest", "user", "premium", "admin"] },
+        "approved": { "type": "boolean" },
+        "credits": { "type": "integer" },
+        "lastCreditReset": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "lastLogin": { "type": "string", "format": "date-time" }
       },

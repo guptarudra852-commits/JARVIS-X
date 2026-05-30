@@ -52,6 +52,7 @@ import {
 
 import { PageId, NavigationItem, SystemLog } from "./types";
 import { getWorkspaceMessages, saveWorkspaceMessages, clearWorkspaceMessages } from "./lib/indexedDb";
+import { safeLocalStorage } from "./utils/safeLocalStorage";
 
 // Import Modular Futuristic Page Views
 import HolographicHUD from "./components/HolographicHUD";
@@ -176,8 +177,7 @@ export const getProviderBigIcon = (provider: string) => {
   }
 };
 
-import { auth, db } from "./lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
+import { auth, db, onAuthStateChanged, isBypassActive } from "./lib/firebase";
 import { doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import Admin from "./components/pages/Admin";
 
@@ -324,21 +324,21 @@ export default function App() {
 
   // UI Evolution States
   const [workspaceLayout, setWorkspaceLayout] = useState<"holographic" | "clean">(() => {
-    const saved = localStorage.getItem("jarvis_workspace_layout");
+    const saved = safeLocalStorage.getItem("jarvis_workspace_layout");
     return (saved as "holographic" | "clean") || "holographic"; // Holographic layout by default!
   });
   const [isLightMode, setIsLightMode] = useState<boolean>(() => {
-    const saved = localStorage.getItem("jarvis_light_mode");
+    const saved = safeLocalStorage.getItem("jarvis_light_mode");
     return saved !== null ? JSON.parse(saved) : false; // Dark mode by default — matches reference design
   });
   const [sidebarExpanded, setSidebarExpanded] = useState<boolean>(() => {
-    const saved = localStorage.getItem("jarvis_sidebar_expanded");
+    const saved = safeLocalStorage.getItem("jarvis_sidebar_expanded");
     return saved !== null ? JSON.parse(saved) : true;
   });
   const [hoverExpandOption, setHoverExpandOption] = useState<boolean>(true);
   const [isHoveringSidebar, setIsHoveringSidebar] = useState<boolean>(false);
   const [activeThemeId, setActiveThemeId] = useState<string>(() => {
-    return localStorage.getItem("jarvis_active_theme") || "cyber-blue";
+    return safeLocalStorage.getItem("jarvis_active_theme") || "cyber-blue";
   });
   const [commandBarOpen, setCommandBarOpen] = useState(false);
   const [commandSearch, setCommandSearch] = useState("");
@@ -363,7 +363,7 @@ export default function App() {
         e.preventDefault();
         setSidebarExpanded((prev) => {
           const newState = !prev;
-          localStorage.setItem("jarvis_sidebar_expanded", JSON.stringify(newState));
+          safeLocalStorage.setItem("jarvis_sidebar_expanded", JSON.stringify(newState));
           addTerminalLog("INFO", `Sidebar system status set: ${newState ? "EXPANDED" : "COLLAPSED"}`);
           return newState;
         });
@@ -397,6 +397,17 @@ export default function App() {
     return () => clearInterval(clockTimer);
   }, []);
 
+  // Routing security guard: redirect unauthorized or non-logged-in users directly to the login interface
+  useEffect(() => {
+    if (booting) return;
+    const publicPages = ["home", "features", "about", "voice", "pricing", "documentation", "blog", "contact", "login", "signup"];
+    const isPublic = publicPages.includes(activePage);
+    if (!isPublic && !auth.currentUser) {
+      addTerminalLog("WARN", `Intercepted unauthorized access to [${activePage.toUpperCase()}]. Redirecting directly to login.`);
+      setActivePage("login");
+    }
+  }, [activePage, booting]);
+
   // Sync Firebase Auth & Firestore live database status
   useEffect(() => {
     let unsubscribeSnap: () => void = () => {};
@@ -409,6 +420,20 @@ export default function App() {
         const userNick = user.displayName || user.email?.split("@")[0].toUpperCase() || "AGENT";
         setCurrentCallsign(userNick);
         addTerminalLog("CORE", `Retinal fingerprint recognized: Captain ${userNick}`);
+
+        const isSimulated = isBypassActive();
+        if (isSimulated) {
+          const finalRole = user.email === "guptarudra852@gmail.com" ? "admin" : "developer";
+          setCurrentUserData({
+            email: user.email || "captain@aurora.io",
+            displayName: user.displayName || "CAPTAIN",
+            role: finalRole,
+            approved: true
+          });
+          setUserRole(finalRole);
+          setIsApproved(true);
+          return;
+        }
 
         const userRef = doc(db, "users", user.uid);
         
@@ -449,6 +474,7 @@ export default function App() {
         setCurrentUserData(null);
         setUserRole("guest");
         setIsApproved(false);
+        setActivePage("login");
       }
     });
 
@@ -530,14 +556,21 @@ export default function App() {
 
   const handleNavigate = (page: PageId) => {
     playSystemBeep(650, 0.12, "sine");
-    setActivePage(page);
+    const publicPages = ["home", "features", "about", "voice", "pricing", "documentation", "blog", "contact", "login", "signup"];
+    const isPublic = publicPages.includes(page);
+    if (!isPublic && !auth.currentUser) {
+      addTerminalLog("WARN", `Uplink rejected. Authentication required for [${page.toUpperCase()}] zone. Redirecting to login.`);
+      setActivePage("login");
+    } else {
+      setActivePage(page);
+    }
     setIsMobileMenuOpen(false);
     addTerminalLog("INFO", `Navigated to systemic zone: ${page.toUpperCase()}`);
   };
 
   const handleThemeShift = (themeId: string) => {
     setActiveThemeId(themeId);
-    localStorage.setItem("jarvis_active_theme", themeId);
+    safeLocalStorage.setItem("jarvis_active_theme", themeId);
     playSystemBeep(720, 0.15, "triangle");
     addTerminalLog("CORE", `Shifting operating neural colors to: ${themeId.replace("-", " ").toUpperCase()}`);
   };
@@ -757,7 +790,7 @@ export default function App() {
   }
 
   const [cleanMessages, setCleanMessages] = useState<CleanMsg[]>(() => {
-    const saved = localStorage.getItem("jarvis_clean_messages");
+    const saved = safeLocalStorage.getItem("jarvis_clean_messages");
     if (saved) {
       try { return JSON.parse(saved); } catch (e) {}
     }
@@ -773,7 +806,7 @@ export default function App() {
   const [cleanInput, setCleanInput] = useState("");
   const [isCleanTyping, setIsCleanTyping] = useState(false);
   const [selectedCleanModel, setSelectedCleanModel] = useState<string>(() => {
-    return localStorage.getItem("jarvis_clean_selected_model") || "claude-sonnet-4-6";
+    return safeLocalStorage.getItem("jarvis_clean_selected_model") || "claude-sonnet-4-6";
   });
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
 
@@ -819,7 +852,7 @@ export default function App() {
   const syncWithIndexedDB = async (messages: CleanMsg[]) => {
     try {
       await saveWorkspaceMessages(messages);
-      localStorage.setItem("jarvis_clean_messages", JSON.stringify(messages));
+      safeLocalStorage.setItem("jarvis_clean_messages", JSON.stringify(messages));
     } catch (err: any) {
       console.error("Failed to sync structural frames to IndexedDB:", err);
     }
@@ -929,7 +962,7 @@ export default function App() {
     setCleanMessages(cleared);
     try {
       await clearWorkspaceMessages();
-      localStorage.setItem("jarvis_clean_messages", JSON.stringify(cleared));
+      safeLocalStorage.setItem("jarvis_clean_messages", JSON.stringify(cleared));
       addTerminalLog("WARN", "Pristine workspace thread purged from IndexedDB and LocalStorage.");
     } catch (err: any) {
       addTerminalLog("ERROR", `Failed to sweep IndexedDB cache registers: ${err.message}`);
@@ -1000,7 +1033,7 @@ export default function App() {
             <button
               onClick={() => {
                 setWorkspaceLayout("holographic");
-                localStorage.setItem("jarvis_workspace_layout", "holographic");
+                safeLocalStorage.setItem("jarvis_workspace_layout", "holographic");
                 setIsLightMode(false);
                 addTerminalLog("CORE", "Switching operating mode to space cybernetic grid HUD.");
               }}
@@ -1415,7 +1448,7 @@ export default function App() {
                                             key={m.id}
                                             onClick={() => {
                                               setSelectedCleanModel(m.id);
-                                              localStorage.setItem("jarvis_clean_selected_model", m.id);
+                                              safeLocalStorage.setItem("jarvis_clean_selected_model", m.id);
                                               setIsModelSelectorOpen(false);
                                               addTerminalLog("INFO", `Activated operational pipeline: ${m.name}`);
                                             }}
@@ -1666,7 +1699,7 @@ export default function App() {
           <button
             onClick={() => {
               setSidebarExpanded(!sidebarExpanded);
-              localStorage.setItem("jarvis_sidebar_expanded", JSON.stringify(!sidebarExpanded));
+              safeLocalStorage.setItem("jarvis_sidebar_expanded", JSON.stringify(!sidebarExpanded));
               playSystemBeep(520, 0.08);
             }}
             className="hidden md:flex p-1.5 border border-white/10 rounded-lg text-slate-400 hover:text-white hover:border-white/20 hover:bg-white/5 cursor-pointer transition-all shrink-0"
@@ -1707,7 +1740,7 @@ export default function App() {
           <button
             onClick={() => {
               setWorkspaceLayout("clean");
-              localStorage.setItem("jarvis_workspace_layout", "clean");
+              safeLocalStorage.setItem("jarvis_workspace_layout", "clean");
               setIsLightMode(true);
               addTerminalLog("CORE", "Switching operating mode to pristine minimalist workspace.");
               playSystemBeep(920, 0.2, "sine");
@@ -1749,7 +1782,7 @@ export default function App() {
           <button
             onClick={() => {
               setIsLightMode(!isLightMode);
-              localStorage.setItem("jarvis_light_mode", JSON.stringify(!isLightMode));
+              safeLocalStorage.setItem("jarvis_light_mode", JSON.stringify(!isLightMode));
               addTerminalLog("INFO", `Holographic Visual Mode Shifted: ${!isLightMode ? "LIGHT GLASS MODE" : "COSMIC DARK MODE"}`);
               playSystemBeep(850, 0.08);
             }}

@@ -28,9 +28,41 @@ export default function Voice({ onLogMessage }: VoiceProps) {
   const [voicePersona, setVoicePersona] = useState("Zephyr");
   const [responseText, setResponseText] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showGlow, setShowGlow] = useState(false);
 
   const voices = ["Zephyr", "Puck", "Charon", "Kore", "Fenrir"];
   const [waveformValues, setWaveformValues] = useState<number[]>(Array(32).fill(25));
+
+  const triggerHapticFeedback = () => {
+    setShowGlow(true);
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      try {
+        navigator.vibrate([60, 40, 60]);
+      } catch (e) {
+        // Safe check
+      }
+    }
+    setTimeout(() => {
+      setShowGlow(false);
+    }, 1200);
+  };
+
+  const handleSelectCommand = (cmd: typeof commandList[0]) => {
+    setIsListening(true);
+    setResponseText("");
+    setIsModalOpen(false);
+    onLogMessage("INFO", `Uplink synchronizing voice signature: "${cmd.utterance}"`);
+    
+    setTimeout(() => {
+      setIsListening(false);
+      setActiveSpeech(true);
+      setResponseText(`"Authorized action matching core decoders: ${cmd.desc} Synapse route successfully dispatched."`);
+      onLogMessage("CORE", `Decoded voice command: "${cmd.utterance}" -> Dispatched to primary OS Core.`);
+      
+      triggerHapticFeedback();
+      playVoiceSynthBeep();
+    }, 1600);
+  };
 
   // Dynamic voice commands database
   const commandList = [
@@ -99,7 +131,9 @@ export default function Voice({ onLogMessage }: VoiceProps) {
         setActiveSpeech(true);
         setResponseText(`"Mainframe connection complete, Captain. All thrusters, reactor blocks, and solar grids are fully aligned. Systems are green."`);
         onLogMessage("CORE", "JARVIS X voice synthesis dispatch complete.");
-        // Audio synthesis simulation plays voice beep
+        
+        // Trigger haptic feedback visual screen glow
+        triggerHapticFeedback();
         playVoiceSynthBeep();
       }, 4000);
     } else {
@@ -127,6 +161,19 @@ export default function Voice({ onLogMessage }: VoiceProps) {
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8 text-white relative">
+      
+      {/* Visual Haptic Screen Glow Overlay confirmation */}
+      <AnimatePresence>
+        {showGlow && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0.75, 0] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1, ease: "easeInOut" }}
+            className="fixed inset-0 pointer-events-none z-50 border-[6px] border-[#00D4FF] shadow-[inset_0_0_60px_rgba(6,182,212,0.65)] mix-blend-screen"
+          />
+        )}
+      </AnimatePresence>
       
       {/* HEADER SECTION with Command Guide Trigger Button */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-cyan-500/10 pb-6 mb-8 select-none">
@@ -315,7 +362,7 @@ export default function Voice({ onLogMessage }: VoiceProps) {
                 <div className="p-3 bg-cyan-950/10 border border-cyan-500/10 rounded-lg flex items-start gap-2.5">
                   <Info className="text-cyan-400 shrink-0 mt-0.5" size={14} />
                   <div className="text-xs text-cyan-200/90 leading-relaxed font-sans">
-                    Enable the microphone by clicking the <span className="text-cyan-400 font-bold font-mono">"PRESS SPEAK"</span> module to synchronize active speech pathways. JARVIS X recognizes commands matching your wake-word context below.
+                    Enable the microphone by clicking the <span className="text-cyan-400 font-bold font-mono">"PRESS SPEAK"</span> module, or <span className="text-fuchsia-400 font-bold">click any command card below</span> to immediately decode and dispatch to the Core.
                   </div>
                 </div>
 
@@ -323,27 +370,28 @@ export default function Voice({ onLogMessage }: VoiceProps) {
                   {commandList.map((cmd, idx) => (
                     <div
                       key={idx}
-                      className={`p-3.5 rounded-xl border transition-all ${
+                      onClick={() => handleSelectCommand(cmd)}
+                      className={`p-3.5 rounded-xl border transition-all cursor-pointer group/cmd hover:border-cyan-400/50 hover:bg-cyan-505/10 hover:shadow-[0_0_12px_rgba(6,182,212,0.1)] active:scale-[0.99] ${
                         isListening
                           ? "border-cyan-500/35 bg-cyan-950/20 shadow-[0_0_12px_rgba(6,182,212,0.08)]"
                           : "border-cyan-500/10 bg-black/10"
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1.5 select-none font-mono">
-                        <span className="text-[8px] text-cyan-400/70 uppercase font-bold tracking-widest">{cmd.category}</span>
+                        <span className="text-[8px] text-cyan-400/70 uppercase font-bold tracking-widest group-hover/cmd:text-cyan-300 transition-colors">{cmd.category}</span>
                         
                         {/* Status Badge */}
                         <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[8px] font-bold uppercase transition-all ${
                           isListening 
                             ? "bg-cyan-400/10 border border-cyan-400 text-cyan-400 animate-pulse" 
-                            : "bg-zinc-805/40 border border-zinc-700/30 text-zinc-500"
+                            : "bg-zinc-805/40 border border-zinc-700/30 text-zinc-500 group-hover/cmd:border-cyan-500/20 group-hover/cmd:text-cyan-400"
                         }`}>
-                          <span className={`w-1 h-1 rounded-full ${isListening ? "bg-cyan-400 animate-pulse" : "bg-zinc-650"}`} />
-                          {isListening ? cmd.micActiveText : cmd.micIdleText}
+                          <span className={`w-1 h-1 rounded-full ${isListening ? "bg-cyan-400 animate-pulse" : "bg-zinc-650 group-hover/cmd:bg-cyan-400"}`} />
+                          {isListening ? cmd.micActiveText : "SIMULATE DISPATCH"}
                         </span>
                       </div>
 
-                      <div className="font-mono text-[11px] font-bold text-white select-all border-l-2 border-[#00D4FF] pl-2 bg-black/15 py-1 px-2 rounded mb-1.5 hover:border-fuchsia-400 transition-colors">
+                      <div className="font-mono text-[11px] font-bold text-white select-all border-l-2 border-[#00D4FF] pl-2 bg-black/15 py-1 px-2 rounded mb-1.5 group-hover/cmd:border-fuchsia-400 transition-colors">
                         "{cmd.utterance}"
                       </div>
 
