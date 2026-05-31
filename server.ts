@@ -7,18 +7,53 @@ import helmet from "helmet";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { initializeApp as initializeAdminApp, getApp } from "firebase-admin/app";
+import { initializeApp as initializeAdminApp, getApp, cert } from "firebase-admin/app";
 import { getAppCheck } from "firebase-admin/app-check";
 import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 
 dotenv.config();
 
-// Initialize Firebase Admin SDK for App Check validation
+// Load the firebase-applet-config.json if it exists
+let config: any = null;
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  }
+} catch (err: any) {
+  console.warn("Could not load firebase-applet-config.json:", err.message);
+}
+
+// Initialize Firebase Admin SDK for App Check/Firestore validation
 let adminAppInitialized = false;
 try {
-  initializeAdminApp();
-  adminAppInitialized = true;
-  console.log("JARVIS X AppCheck: Firebase Admin SDK implicitly initialized successfully.");
+  const firebaseProjId = process.env.FIREBASE_PROJECT_ID || config?.projectId;
+  const firebaseClientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY;
+
+  if (firebaseClientEmail && firebasePrivateKey) {
+    const formattedPrivateKey = firebasePrivateKey.replace(/\\n/g, "\n");
+    initializeAdminApp({
+      credential: cert({
+        projectId: firebaseProjId,
+        clientEmail: firebaseClientEmail,
+        privateKey: formattedPrivateKey
+      }),
+      projectId: firebaseProjId
+    });
+    adminAppInitialized = true;
+    console.log("JARVIS X AppCheck: Firebase Admin SDK initialized with custom service account credentials.");
+  } else if (firebaseProjId) {
+    initializeAdminApp({
+      projectId: firebaseProjId
+    });
+    adminAppInitialized = true;
+    console.log(`JARVIS X AppCheck: Firebase Admin SDK initialized with project ID: ${firebaseProjId}`);
+  } else {
+    initializeAdminApp();
+    adminAppInitialized = true;
+    console.log("JARVIS X AppCheck: Firebase Admin SDK implicitly initialized successfully.");
+  }
 } catch (e: any) {
   try {
     getApp();
@@ -63,19 +98,20 @@ const getWritablePath = (subdir: string, filename: string): string => {
   return originalPath;
 };
 
-// Load the database ID dynamically from firebase-applet-config.json for dev environments
-let customDatabaseId: string | undefined = undefined;
-try {
-  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-  if (fs.existsSync(configPath)) {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    if (config.firestoreDatabaseId && process.env.NODE_ENV !== "production") {
-      customDatabaseId = config.firestoreDatabaseId;
-      console.log(`JARVIS X Firestore: Found cloud database parameter matching: ${customDatabaseId}`);
-    }
-  }
-} catch (err: any) {
-  console.warn("Could not load firebase-applet-config.json dynamically:", err.message);
+// Load the database ID dynamically from environment variables or firebase-applet-config.json
+let customDatabaseId: string | undefined = process.env.FIREBASE_DATABASE_ID;
+if (!customDatabaseId && config && config.firestoreDatabaseId) {
+  customDatabaseId = config.firestoreDatabaseId;
+}
+
+// Ensure we ignore the custom applet database ID as requested and default to (default)
+if (customDatabaseId === "ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac") {
+  console.log("JARVIS X Firestore: Overriding custom applet database ID with default database (default)");
+  customDatabaseId = undefined;
+}
+
+if (customDatabaseId) {
+  console.log(`JARVIS X Firestore: Found cloud database parameter matching: ${customDatabaseId}`);
 }
 
 const getDbAdmin = () => {
@@ -239,8 +275,8 @@ app.use(cors({
     if (
       !origin ||
       allowedOrigins.includes(origin) ||
-      origin.endsWith(".run.app") ||
-      origin.endsWith(".vercel.app") ||
+      origin.includes(".run.app") ||
+      origin.includes(".vercel.app") ||
       origin.includes("localhost") ||
       origin.includes("127.0.0.1")
     ) {
@@ -340,8 +376,8 @@ async function getUserCreditsState(uid: string, email?: string, displayName?: st
   const userRecord = localDb[uid] || {};
   credits = typeof userRecord.credits === "number" ? userRecord.credits : 500;
   lastCreditReset = userRecord.lastCreditReset || "";
-  role = userRecord.role || (email === "guptarudra852@gmail.com" ? "admin" : "guest");
-  approved = userRecord.approved ?? (email === "guptarudra852@gmail.com");
+  role = userRecord.role || (email === "guptarudra852@gmail.com" ? "admin" : "user");
+  approved = userRecord.approved ?? true;
   usageLogs = userRecord.usageLogs || [];
 
   if (lastCreditReset !== todayStr) {
@@ -762,6 +798,16 @@ async function runOpenRouterQuery(messages: any[], openRouterKey: string, select
 }
 
 // Primary Chat Proxy Route
+app.get("/api/chat", (req, res) => {
+  return res.json({
+    status: "active",
+    message: "JARVIS X AI Chat Engine core is online and ready.",
+    instruction: "To initiate an AI conversation, please send a POST request with your messages payload.",
+    endpoint: "POST /api/chat",
+    supportedModels: ["gemini-2.5-pro", "gemini-2.5-flash", "openrouter"]
+  });
+});
+
 app.post("/api/chat", aiLimiter, async (req, res) => {
   try {
     const { userUid, userEmail, userDisplayName } = req.body;

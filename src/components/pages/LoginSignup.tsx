@@ -183,12 +183,27 @@ export default function LoginSignup({ onLogMessage, onLoginStatusChange, mode = 
         lastLogin: serverTimestamp(),
       };
       
-      // Only set defaults if user is completely brand new
-      if (!userSnap.exists()) {
+      const existingData = userSnap.exists() ? userSnap.data() : null;
+      
+      // Default to "user" and "approved = true" so that newly signed up/logged in users are not locked out of Jarvis AI chat.
+      // Auto-promote Rudra's email to "admin"
+      const defaultRole = user.email === "guptarudra852@gmail.com" ? "admin" : "user";
+      
+      if (!existingData) {
         payload.createdAt = serverTimestamp();
-        payload.role = "guest";
-        payload.approved = false;
+        payload.role = defaultRole;
+        payload.approved = true;
         payload.allowedDevices = [];
+        payload.credits = 500;
+      } else {
+        payload.createdAt = existingData.createdAt || serverTimestamp();
+        payload.role = existingData.role || defaultRole;
+        payload.approved = existingData.approved ?? true;
+        payload.allowedDevices = existingData.allowedDevices || [];
+        payload.credits = existingData.credits ?? 500;
+        if (existingData.lastCreditReset) {
+          payload.lastCreditReset = existingData.lastCreditReset;
+        }
       }
       
       await setDoc(userRef, payload, { merge: true });
@@ -456,10 +471,15 @@ export default function LoginSignup({ onLogMessage, onLoginStatusChange, mode = 
         }
 
         try {
+          const defaultRole = email === "guptarudra852@gmail.com" ? "admin" : "user";
           await setDoc(doc(db, "users", user.uid), {
             email: email,
             displayName: userNick,
-            createdAt: serverTimestamp()
+            createdAt: serverTimestamp(),
+            role: defaultRole,
+            approved: true,
+            credits: 500,
+            allowedDevices: []
           });
           onLogMessage("CORE", `Firestore profile record compiled: users/${user.uid}`);
         } catch (fsError: any) {

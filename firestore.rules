@@ -82,24 +82,19 @@ service cloud.firestore {
           request.auth.uid == userId &&
 
           // Email cannot change
-          request.resource.data.email ==
-          resource.data.email &&
+          (!('email' in resource.data) || request.resource.data.email == resource.data.email) &&
 
           // Credits cannot change
-          request.resource.data.credits ==
-          resource.data.credits &&
+          (!('credits' in resource.data) || request.resource.data.credits == resource.data.credits) &&
 
           // Role cannot change
-          request.resource.data.role ==
-          resource.data.role &&
+          (!('role' in resource.data) || request.resource.data.role == resource.data.role) &&
 
           // Approval cannot change
-          request.resource.data.approved ==
-          resource.data.approved &&
+          (!('approved' in resource.data) || request.resource.data.approved == resource.data.approved) &&
 
           // Daily reset field cannot change
-          request.resource.data.lastCreditReset ==
-          resource.data.lastCreditReset
+          (!('lastCreditReset' in resource.data) || request.resource.data.lastCreditReset == resource.data.lastCreditReset)
         )
         ||
         // Admin can update everything

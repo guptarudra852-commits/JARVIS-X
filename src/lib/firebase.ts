@@ -22,10 +22,12 @@ const app = initializeApp({
   appId: firebaseConfig.appId,
 });
 
-const dbId = (firebaseConfig as any).firestoreDatabaseId && 
-  (firebaseConfig as any).firestoreDatabaseId !== "(default)" && 
+const rawDbId = (firebaseConfig as any).firestoreDatabaseId;
+const dbId = rawDbId && 
+  rawDbId !== "(default)" && 
+  rawDbId !== "ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac" &&
   !(import.meta as any).env?.PROD
-  ? (firebaseConfig as any).firestoreDatabaseId
+  ? rawDbId
   : undefined;
 
 export const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
