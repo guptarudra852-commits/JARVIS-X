@@ -10,6 +10,7 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { initializeApp as initializeAdminApp, getApp } from "firebase-admin/app";
 import { getAppCheck } from "firebase-admin/app-check";
+import { getFirestore as getAdminFirestore } from "firebase-admin/firestore";
 
 dotenv.config();
 
@@ -217,6 +218,246 @@ const aiLimiter = rateLimit({
 
 // Apply general rate limit to all /api endpoints
 app.use("/api/", generalLimiter);
+
+// ==========================================
+// JARVIS X DIGITAL CREDIT ENGINE
+// ==========================================
+
+// Helper to get or initialize user credits (supporting both firestore rules and local fallback)
+async function getUserCreditsState(uid: string, email?: string, displayName?: string) {
+  const todayStr = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  let credits = 500;
+  let lastCreditReset = todayStr;
+  let role = "guest";
+  let approved = false;
+  let usageLogs: any[] = [];
+
+  // Try Firestore first if admin initialized
+  if (adminAppInitialized) {
+    try {
+      const dbAdmin = getAdminFirestore();
+      const userRef = dbAdmin.collection("users").doc(uid);
+      const docSnap = await userRef.get();
+
+      if (docSnap.exists) {
+        const data = docSnap.data() || {};
+        credits = typeof data.credits === "number" ? data.credits : 500;
+        lastCreditReset = data.lastCreditReset || "";
+        role = data.role || "guest";
+        approved = data.approved ?? false;
+        usageLogs = data.usageLogs || [];
+
+        // Check reset condition: if last reset was not today
+        if (lastCreditReset !== todayStr) {
+          credits = 500;
+          lastCreditReset = todayStr;
+          await userRef.update({
+            credits,
+            lastCreditReset,
+            updatedAt: new Date().toISOString()
+          });
+        }
+        return { credits, lastCreditReset, role, approved, usageLogs };
+      }
+    } catch (e: any) {
+      console.warn("[Credits SDK] Firestore admin credits fetch warning, falling back to local file context:", e.message);
+    }
+  }
+
+  // Fallback to local user_credits.json file
+  const creditsDir = path.join(process.cwd(), "src", "data");
+  if (!fs.existsSync(creditsDir)) {
+    fs.mkdirSync(creditsDir, { recursive: true });
+  }
+  const creditsPath = path.join(creditsDir, "user_credits.json");
+  let localDb: Record<string, any> = {};
+  if (fs.existsSync(creditsPath)) {
+    try {
+      localDb = JSON.parse(fs.readFileSync(creditsPath, "utf-8"));
+    } catch (e) {
+      localDb = {};
+    }
+  }
+
+  const userRecord = localDb[uid] || {};
+  credits = typeof userRecord.credits === "number" ? userRecord.credits : 500;
+  lastCreditReset = userRecord.lastCreditReset || "";
+  role = userRecord.role || (email === "guptarudra852@gmail.com" ? "admin" : "guest");
+  approved = userRecord.approved ?? (email === "guptarudra852@gmail.com");
+  usageLogs = userRecord.usageLogs || [];
+
+  if (lastCreditReset !== todayStr) {
+    credits = 500;
+    lastCreditReset = todayStr;
+    localDb[uid] = {
+      ...userRecord,
+      credits,
+      lastCreditReset,
+      email: email || userRecord.email || "",
+      displayName: displayName || userRecord.displayName || "",
+      role,
+      approved,
+      updatedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(creditsPath, JSON.stringify(localDb, null, 2), "utf-8");
+  } else if (!localDb[uid]) {
+    localDb[uid] = {
+      credits,
+      lastCreditReset,
+      email: email || "",
+      displayName: displayName || "",
+      role,
+      approved,
+      usageLogs,
+      updatedAt: new Date().toISOString()
+    };
+    fs.writeFileSync(creditsPath, JSON.stringify(localDb, null, 2), "utf-8");
+  }
+
+  return { credits, lastCreditReset, role, approved, usageLogs };
+}
+
+// Helper to deduct credits with dynamic transaction logs
+async function deductUserCredits(uid: string, amount: number, action: string, email?: string, displayName?: string) {
+  const state = await getUserCreditsState(uid, email, displayName);
+  
+  // Admin user has unlimited credit bypass
+  if (state.role === "admin") {
+    return { credits: state.credits, usageLogs: state.usageLogs, role: state.role };
+  }
+
+  if (state.credits < amount) {
+    throw new Error(`Insufficient AI credits. Required: ${amount}, Remaining: ${state.credits}`);
+  }
+
+  const newCredits = state.credits - amount;
+  const newLog = {
+    timestamp: new Date().toISOString(),
+    action,
+    amount,
+    remaining: newCredits
+  };
+  const updatedLogs = [newLog, ...(state.usageLogs || [])].slice(0, 50); // Keep last 50 logs
+
+  if (adminAppInitialized) {
+    try {
+      const dbAdmin = getAdminFirestore();
+      const userRef = dbAdmin.collection("users").doc(uid);
+      await userRef.update({
+        credits: newCredits,
+        usageLogs: updatedLogs,
+        updatedAt: new Date().toISOString()
+      });
+      return { credits: newCredits, usageLogs: updatedLogs, role: state.role };
+    } catch (e: any) {
+      console.warn("[Credits SDK] Firestore admin credits deduct warning, writing locally:", e.message);
+    }
+  }
+
+  // Backup write local JSON file
+  const creditsPath = path.join(process.cwd(), "src", "data", "user_credits.json");
+  let localDb: Record<string, any> = {};
+  if (fs.existsSync(creditsPath)) {
+    try {
+      localDb = JSON.parse(fs.readFileSync(creditsPath, "utf-8"));
+    } catch (e) {
+      localDb = {};
+    }
+  }
+
+  const record = localDb[uid] || {};
+  localDb[uid] = {
+    ...record,
+    credits: newCredits,
+    usageLogs: updatedLogs,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(creditsPath, JSON.stringify(localDb, null, 2), "utf-8");
+
+  return { credits: newCredits, usageLogs: updatedLogs, role: state.role };
+}
+
+// Helper for admin override
+async function overrideUserCredits(adminUid: string, targetUid: string, newCreditsVal: number) {
+  // Validate caller role
+  const callerState = await getUserCreditsState(adminUid);
+  if (callerState.role !== "admin") {
+    throw new Error("Clearance denied. Action requires main admin role privileges.");
+  }
+
+  const targetState = await getUserCreditsState(targetUid);
+  const newLog = {
+    timestamp: new Date().toISOString(),
+    action: "ADMIN_OVERRIDE",
+    amount: newCreditsVal - targetState.credits,
+    remaining: newCreditsVal
+  };
+  const updatedLogs = [newLog, ...(targetState.usageLogs || [])].slice(0, 50);
+
+  if (adminAppInitialized) {
+    try {
+      const dbAdmin = getAdminFirestore();
+      const userRef = dbAdmin.collection("users").doc(targetUid);
+      await userRef.update({
+        credits: newCreditsVal,
+        usageLogs: updatedLogs,
+        updatedAt: new Date().toISOString()
+      });
+      return { success: true };
+    } catch (e: any) {
+      console.warn("[Credits SDK] Firestore override warning, writing locally:", e.message);
+    }
+  }
+
+  const creditsPath = path.join(process.cwd(), "src", "data", "user_credits.json");
+  let localDb: Record<string, any> = {};
+  if (fs.existsSync(creditsPath)) {
+    try {
+      localDb = JSON.parse(fs.readFileSync(creditsPath, "utf-8"));
+    } catch (e) {
+      localDb = {};
+    }
+  }
+
+  const record = localDb[targetUid] || {};
+  localDb[targetUid] = {
+    ...record,
+    credits: newCreditsVal,
+    usageLogs: updatedLogs,
+    updatedAt: new Date().toISOString()
+  };
+  fs.writeFileSync(creditsPath, JSON.stringify(localDb, null, 2), "utf-8");
+
+  return { success: true };
+}
+
+// Clear state endpoint for user credits
+app.get("/api/credits/state", async (req, res) => {
+  try {
+    const { userId, email, displayName } = req.query;
+    if (!userId) {
+      return res.status(400).json({ error: "userId parameter is required." });
+    }
+    const state = await getUserCreditsState(userId as string, email as string, displayName as string);
+    return res.json(state);
+  } catch (err: any) {
+    return res.status(550).json({ error: "Failed to retrieve credit footprint: " + err.message });
+  }
+});
+
+// Admin credit override endpoint
+app.post("/api/credits/override", async (req, res) => {
+  try {
+    const { adminUserId, targetUserId, newCreditsVal } = req.body;
+    if (!adminUserId || !targetUserId || typeof newCreditsVal !== "number") {
+      return res.status(400).json({ error: "Invalid parameters provided for credit override." });
+    }
+    const result = await overrideUserCredits(adminUserId, targetUserId, newCreditsVal);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(403).json({ error: err.message });
+  }
+});
 
 // API health check
 app.get("/api/health", (req, res) => {
@@ -465,6 +706,17 @@ async function runOpenRouterQuery(messages: any[], openRouterKey: string, select
 // Primary Chat Proxy Route
 app.post("/api/chat", aiLimiter, async (req, res) => {
   try {
+    const { userUid, userEmail, userDisplayName } = req.body;
+    let creditResult: any = null;
+
+    if (userUid) {
+      try {
+        creditResult = await deductUserCredits(userUid, 10, "chat", userEmail, userDisplayName);
+      } catch (creditsErr: any) {
+        return res.status(402).json({ error: creditsErr.message });
+      }
+    }
+
     // Validate request body structure using Zod to secure against overflow/injection
     const chatPayloadSchema = z.object({
       messages: z.array(z.object({
@@ -486,13 +738,19 @@ app.post("/api/chat", aiLimiter, async (req, res) => {
     const openRouterKey = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY;
     if (!openRouterKey) {
       return res.json({
-        text: `🤖 **[JARVIS X Local Simulated Mode]**\n\nGreetings. I am operating in local auxiliary safe-mode as the active OpenRouter neural connector key is missing. \n\nYou asked: "${lastUserMsg}"\n\nTo activate my complete OpenRouter conversational network, please provide the **OPENROUTER_API_KEY** secret in your Settings panel. How may I assist you, Captain?`
+        text: `🤖 **[JARVIS X Local Simulated Mode]**\n\nGreetings. I am operating in local auxiliary safe-mode as the active OpenRouter neural connector key is missing. \n\nYou asked: "${lastUserMsg}"\n\nTo activate my complete OpenRouter conversational network, please provide the **OPENROUTER_API_KEY** secret in your Settings panel. How may I assist you, Captain?`,
+        remainingCredits: creditResult ? creditResult.credits : null,
+        userRole: creditResult ? creditResult.role : null
       });
     }
 
     try {
       const text = await runOpenRouterQuery(messages, openRouterKey, model || undefined);
-      return res.json({ text });
+      return res.json({
+        text,
+        remainingCredits: creditResult ? creditResult.credits : null,
+        userRole: creditResult ? creditResult.role : null
+      });
     } catch (orErr: any) {
       console.error("OpenRouter route execution failure (Sanitized):", orErr.message);
       return res.status(500).json({ error: "All OpenRouter computational pipelines are offline. Please verify API key configuration." });
@@ -506,6 +764,17 @@ app.post("/api/chat", aiLimiter, async (req, res) => {
 // Dedicated Futuristic JARVIS Search Pipeline Endpoint
 app.post("/api/search", aiLimiter, async (req, res) => {
   try {
+    const { userUid, userEmail, userDisplayName } = req.body;
+    let creditResult: any = null;
+
+    if (userUid) {
+      try {
+        creditResult = await deductUserCredits(userUid, 20, "search", userEmail, userDisplayName);
+      } catch (creditsErr: any) {
+        return res.status(402).json({ error: creditsErr.message });
+      }
+    }
+
     // Schema validation for input parameters
     const searchPayloadSchema = z.object({
       query: z.string().min(1).max(1000).trim(),
@@ -695,7 +964,9 @@ Please end your response strictly with the following metadata tags on separate l
         sources,
         relatedSearches,
         steps,
-        youtubeVideoId
+        youtubeVideoId,
+        remainingCredits: creditResult ? creditResult.credits : null,
+        userRole: creditResult ? creditResult.role : null
       });
     } catch (orErr: any) {
       console.error("OpenRouter Search error:", orErr);
@@ -831,6 +1102,17 @@ app.post("/api/memories", async (req, res) => {
 // Generate dynamic AI / procedural network visuals for memories (Imagen SDK integration)
 app.post("/api/generate-image", aiLimiter, async (req, res) => {
   try {
+    const { userUid, userEmail, userDisplayName } = req.body;
+    let creditResult: any = null;
+
+    if (userUid) {
+      try {
+        creditResult = await deductUserCredits(userUid, 50, "generate-image", userEmail, userDisplayName);
+      } catch (creditsErr: any) {
+        return res.status(402).json({ error: creditsErr.message });
+      }
+    }
+
     const generateImageSchema = z.object({
       prompt: z.string().min(1).max(500).trim()
     });
@@ -926,7 +1208,11 @@ app.post("/api/generate-image", aiLimiter, async (req, res) => {
     `;
 
     const base64Svg = Buffer.from(svgString.trim()).toString("base64");
-    return res.json({ imageUrl: `data:image/svg+xml;base64,${base64Svg}` });
+    return res.json({
+      imageUrl: `data:image/svg+xml;base64,${base64Svg}`,
+      remainingCredits: creditResult ? creditResult.credits : null,
+      userRole: creditResult ? creditResult.role : null
+    });
   } catch (err: any) {
     console.error("Critical Image Generation Exception:", err);
     res.status(500).json({ error: "Failed to compile visual schematic matrix: " + err.message });
@@ -2122,9 +2408,13 @@ async function setupVite() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`JARVIS X Server active at http://0.0.0.0:${PORT} [System Mode: ${process.env.NODE_ENV || "development"}]`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`JARVIS X Server active at http://0.0.0.0:${PORT} [System Mode: ${process.env.NODE_ENV || "development"}]`);
+    });
+  }
 }
 
 setupVite();
+
+export default app;

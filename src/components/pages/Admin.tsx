@@ -46,6 +46,7 @@ interface UserProfile {
   allowedDevices?: string[];
   createdAt?: any;
   lastLogin?: any;
+  credits?: number;
 }
 
 interface AdminProps {
@@ -117,6 +118,23 @@ export default function Admin({ onLogMessage }: AdminProps) {
     } catch (err: any) {
       setError(`Failed to update role: ${err.message}`);
       onLogMessage("ERROR", `Role assign mismatch: ${err.message}`);
+    }
+  };
+
+  const handleOverrideCredits = async (userId: string, newCredits: number) => {
+    try {
+      const res = await fetch("/api/credits/override", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, newCredits }),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      onLogMessage("CORE", `Admin override: User [${userId.slice(0, 6)}] credits updated to ${newCredits}.`);
+    } catch (err: any) {
+      setError(`Failed to override credits: ${err.message}`);
+      onLogMessage("ERROR", `Credits override fault: ${err.message}`);
     }
   };
 
@@ -521,6 +539,7 @@ export default function Admin({ onLogMessage }: AdminProps) {
                       <th className="py-3 px-4">Contact Gateway</th>
                       <th className="py-3 px-4">Role Matrix</th>
                       <th className="py-3 px-4">Secure Devices</th>
+                      <th className="py-3 px-4 text-center">System Credits</th>
                       <th className="py-3 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
@@ -604,6 +623,27 @@ export default function Admin({ onLogMessage }: AdminProps) {
                               className="bg-cyan-500/20 hover:bg-cyan-500 text-cyan-700 dark:text-cyan-300 hover:text-black hover:dark:text-black font-bold px-1.5 py-0.5 rounded text-[9px] transition-colors cursor-pointer"
                             >
                               BIND
+                            </button>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-center min-w-[124px]">
+                          <div className="font-mono font-bold text-sky-500 text-sm mb-1">
+                            {typeof u.credits === "number" ? u.credits : 500} CR
+                          </div>
+                          <div className="flex gap-1.5 justify-center">
+                            <button
+                              onClick={() => handleOverrideCredits(u.uid, (u.credits ?? 500) + 100)}
+                              className="bg-emerald-500/15 hover:bg-emerald-500 hover:text-white text-emerald-500 font-extrabold px-2 py-0.5 rounded text-[8px] transition-all cursor-pointer"
+                              title="Add 100 system credits"
+                            >
+                              +100
+                            </button>
+                            <button
+                              onClick={() => handleOverrideCredits(u.uid, Math.max(0, (u.credits ?? 500) - 100))}
+                              className="bg-red-500/15 hover:bg-red-500 hover:text-white text-red-500 font-extrabold px-2 py-0.5 rounded text-[8px] transition-all cursor-pointer"
+                              title="Deduct 100 system credits"
+                            >
+                              -100
                             </button>
                           </div>
                         </td>

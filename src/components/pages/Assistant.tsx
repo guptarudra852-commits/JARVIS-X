@@ -538,11 +538,23 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: userHistory.slice(-5), provider }),
+        body: JSON.stringify({
+          messages: userHistory.slice(-5),
+          provider,
+          userUid: auth.currentUser?.uid,
+          userEmail: auth.currentUser?.email,
+          userDisplayName: auth.currentUser?.displayName
+        }),
       });
       
       let aiText = "Secure buffer returned zero values.";
-      if (response.ok) {
+      if (!response.ok) {
+        if (response.status === 402) {
+          aiText = "⚠️ **[Credits Exhausted]** Your account has depleted historical credit limits for today. Reset will materialize automatically tomorrow.";
+        } else {
+          aiText = `Error linking server: HTTPStatus ${response.status}`;
+        }
+      } else {
         const data = await response.json();
         aiText = data.text;
       }
@@ -685,9 +697,20 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history, provider }),
+          body: JSON.stringify({
+            messages: history,
+            provider,
+            userUid: auth.currentUser?.uid,
+            userEmail: auth.currentUser?.email,
+            userDisplayName: auth.currentUser?.displayName
+          }),
         });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          if (res.status === 402) {
+            throw new Error("Insufficient neural credits (Daily 500 CR margin reached). Limits recover tomorrow.");
+          }
+          throw new Error(`HTTP ${res.status}`);
+        }
         const data = await res.json();
         const aiResponseText = data.text || "Empty response buffer.";
         
@@ -747,9 +770,20 @@ export default function Assistant({ onLogMessage, onNavigate }: AssistantProps) 
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, provider }),
+        body: JSON.stringify({
+          messages: history,
+          provider,
+          userUid: auth.currentUser?.uid,
+          userEmail: auth.currentUser?.email,
+          userDisplayName: auth.currentUser?.displayName
+        }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 402) {
+          throw new Error("Insufficient credits. Auto-reset at 00:00.");
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data = await res.json();
       setMessages(prev => [...prev, {
         id: Math.random().toString(),

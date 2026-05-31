@@ -312,6 +312,19 @@ export default function App() {
   const [currentUserData, setCurrentUserData] = useState<any>(null);
   const [userRole, setUserRole] = useState<string>("guest");
   const [isApproved, setIsApproved] = useState<boolean>(false);
+  const [userCredits, setUserCredits] = useState<number | null>(500);
+
+  const fetchCreditsState = async (uid: string, email?: string, displayName?: string) => {
+    try {
+      const res = await fetch(`/api/credits/state?userId=${uid}&email=${encodeURIComponent(email || "")}&displayName=${encodeURIComponent(displayName || "")}`);
+      if (res.ok) {
+        const data = await res.json();
+        setUserCredits(data.credits);
+      }
+    } catch (e) {
+      console.warn("Credits state fetch error:", e);
+    }
+  };
 
   // Telemetry sequences
   const [booting, setBooting] = useState(true);
@@ -421,6 +434,9 @@ export default function App() {
         setCurrentCallsign(userNick);
         addTerminalLog("CORE", `Retinal fingerprint recognized: Captain ${userNick}`);
 
+        // Fetch credits state
+        fetchCreditsState(user.uid, user.email || undefined, user.displayName || undefined);
+
         const isSimulated = isBypassActive();
         if (isSimulated) {
           const finalRole = user.email === "guptarudra852@gmail.com" ? "admin" : "developer";
@@ -428,10 +444,12 @@ export default function App() {
             email: user.email || "captain@aurora.io",
             displayName: user.displayName || "CAPTAIN",
             role: finalRole,
-            approved: true
+            approved: true,
+            credits: 500
           });
           setUserRole(finalRole);
           setIsApproved(true);
+          setUserCredits(500);
           return;
         }
 
@@ -445,6 +463,7 @@ export default function App() {
               displayName: "RUDRA",
               role: "admin",
               approved: true,
+              credits: 500,
               lastLogin: serverTimestamp()
             }, { merge: true });
           } catch (e) {
@@ -459,11 +478,15 @@ export default function App() {
             setCurrentUserData(data);
             setUserRole(data.role || "guest");
             setIsApproved(data.approved ?? false);
+            if (typeof data.credits === "number") {
+              setUserCredits(data.credits);
+            }
           } else {
             // Unregistered user or just registered without doc yet
-            setCurrentUserData({ role: "guest", approved: false });
+            setCurrentUserData({ role: "guest", approved: false, credits: 500 });
             setUserRole("guest");
             setIsApproved(false);
+            setUserCredits(500);
           }
         }, (err) => {
           console.error("Firestore user sub error: ", err);
@@ -921,10 +944,25 @@ export default function App() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history, provider: "openrouter", model: selectedCleanModel })
+        body: JSON.stringify({
+          messages: history,
+          provider: "openrouter",
+          model: selectedCleanModel,
+          userUid: auth.currentUser?.uid,
+          userEmail: auth.currentUser?.email,
+          userDisplayName: auth.currentUser?.displayName
+        })
       });
-      if (!res.ok) throw new Error("Synaptic service error");
+      if (!res.ok) {
+        if (res.status === 402) {
+          throw new Error("Insufficient database credits. Your account daily limit has been exhausted. Balance resets automatically tomorrow, or request an override from an Administrator.");
+        }
+        throw new Error("Synaptic service error connection failed.");
+      }
       const data = await res.json();
+      if (typeof data.remainingCredits === "number") {
+        setUserCredits(data.remainingCredits);
+      }
       
       const botMsg: CleanMsg = {
         id: Math.random().toString(),
@@ -935,11 +973,11 @@ export default function App() {
       const finalMsg = [...updatedMessages, botMsg];
       setCleanMessages(finalMsg);
       await syncWithIndexedDB(finalMsg);
-    } catch (e) {
+    } catch (e: any) {
       const errorMsg: CleanMsg = {
         id: Math.random().toString(),
         role: "assistant",
-        content: "⚠️ **[Synaptic Disjoint Mode]** I could not link into the cloud neural network. Your parameters have been safely stored locally. Verify API configuration in Settings.",
+        content: `⚠️ **[Synaptic Disjoint Mode]** ${e.message || "I could not link into the cloud neural network. Your parameters have been safely stored locally. Verify API configuration in Settings."}`,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       };
       const finalMsg = [...updatedMessages, errorMsg];
@@ -1223,8 +1261,8 @@ export default function App() {
                   <span className="block text-xs font-bold text-zinc-800 truncate max-w-[85px]" title={currentCallsign || "Captain"}>
                     {currentCallsign || "Captain"}
                   </span>
-                  <span className="text-[9px] text-[#DA7F5B] font-bold select-none uppercase tracking-wider block mt-0.5">
-                    {userRole}
+                  <span className={`text-[9px] font-bold select-none uppercase tracking-wider block mt-0.5 ${userCredits !== null && userCredits <= 100 ? "text-red-600 dark:text-red-500 animate-pulse font-extrabold" : "text-[#DA7F5B]"}`}>
+                    {userRole} • {userCredits !== null ? `${userCredits} CR` : "500 CR"} {userCredits !== null && userCredits <= 100 && "⚠️ LOW"}
                   </span>
                 </div>
               </div>

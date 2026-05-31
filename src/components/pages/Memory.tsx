@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2, LayoutGrid, Server } from "lucide-react";
 import { MemoryCard } from "../../types";
+import { auth } from "../../lib/firebase";
 
 interface FixedSizeListProps {
   height: number;
@@ -64,7 +65,8 @@ interface MemoryProps {
 export default function Memory({ onLogMessage }: MemoryProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState<string>("all");
-  const [sortBy, setSortBy] = useState<"relevance" | "date">("relevance");
+  const [sortBy, setSortBy] = useState<"relevance" | "date" | "category">("relevance");
+  const [isSortOpen, setIsSortOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"grid" | "virtual">("grid");
   const [memories, setMemories] = useState<MemoryCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,9 +136,19 @@ export default function Memory({ onLogMessage }: MemoryProps) {
       const res = await fetch("/api/generate-image", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: promptToUse })
+        body: JSON.stringify({
+          prompt: promptToUse,
+          userUid: auth.currentUser?.uid,
+          userEmail: auth.currentUser?.email,
+          userDisplayName: auth.currentUser?.displayName
+        })
       });
-      if (!res.ok) throw new Error("Visual generation connection refused or timed out.");
+      if (!res.ok) {
+        if (res.status === 402) {
+          throw new Error("Insufficient database credits for image compilation. Your 500 CR limit resets tomorrow, or contact an Admin.");
+        }
+        throw new Error("Visual generation connection refused or timed out.");
+      }
       const data = await res.json();
       setEditImageUrl(data.imageUrl);
       onLogMessage("CORE", `Visual schematic matrix finalized and loaded for "${promptToUse}"`);
@@ -220,6 +232,13 @@ export default function Memory({ onLogMessage }: MemoryProps) {
         return relB - relA;
       }
       return (b.timestamp || "").localeCompare(a.timestamp || "");
+    } else if (sortBy === "category") {
+      const catA = a.category || "";
+      const catB = b.category || "";
+      if (catA !== catB) {
+        return catA.localeCompare(catB);
+      }
+      return (b.timestamp || "").localeCompare(a.timestamp || "");
     } else {
       return (b.timestamp || "").localeCompare(a.timestamp || "");
     }
@@ -265,39 +284,73 @@ export default function Memory({ onLogMessage }: MemoryProps) {
             />
           </div>
 
-          <div className="flex items-center gap-1.5 bg-cyan-950/20 border border-cyan-500/10 p-1 rounded-lg w-full sm:w-auto justify-center">
+          <div className="relative flex items-center gap-1.5 bg-cyan-950/20 border border-cyan-500/10 p-1 rounded-lg w-full sm:w-auto justify-center font-mono text-[9px]">
             <ArrowUpDown size={11} className="text-cyan-400/50" />
-            <span className="text-[9px] font-mono text-cyan-400/50 uppercase tracking-widest px-0.5 select-none">SORT:</span>
-            <button
-              id="sort-relevance-button"
-              type="button"
-              onClick={() => {
-                setSortBy("relevance");
-                onLogMessage("INFO", "Re-indexed memory core state sorted by contextual relevance descending.");
-              }}
-              className={`px-2.5 py-1 font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer rounded-md ${
-                sortBy === "relevance"
-                  ? "bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold"
-                  : "border border-transparent text-gray-400 hover:text-cyan-400"
-              }`}
-            >
-              Relevance
-            </button>
-            <button
-              id="sort-date-button"
-              type="button"
-              onClick={() => {
-                setSortBy("date");
-                onLogMessage("INFO", "Re-indexed memory core state sorted by date created descending.");
-              }}
-              className={`px-2.5 py-1 font-mono text-[9px] uppercase transition-all shrink-0 cursor-pointer rounded-md ${
-                sortBy === "date"
-                  ? "bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 font-bold"
-                  : "border border-transparent text-gray-400 hover:text-cyan-400"
-              }`}
-            >
-              Date Created
-            </button>
+            <span className="text-cyan-400/50 uppercase tracking-widest px-0.5 select-none font-bold">SORT BY:</span>
+            <div className="relative">
+              <button
+                id="sort-dropdown-toggle"
+                type="button"
+                onClick={() => setIsSortOpen(!isSortOpen)}
+                className="px-2.5 py-1.5 flex items-center gap-1.5 border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/15 text-cyan-300 font-bold uppercase transition-all shrink-0 cursor-pointer rounded-md focus:outline-none"
+              >
+                <span>
+                  {sortBy === "relevance"
+                    ? "Relevance"
+                    : sortBy === "date"
+                    ? "Creation Date"
+                    : "Category Name"}
+                </span>
+                <span className="text-[7px] text-cyan-400/70 select-none">▼</span>
+              </button>
+
+              <AnimatePresence>
+                {isSortOpen && (
+                  <>
+                    {/* Backdrop */}
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setIsSortOpen(false)}
+                    />
+                    <motion.div
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.15 }}
+                      className="absolute right-0 mt-2 min-w-[140px] bg-[#030712]/95 border border-cyan-500/25 rounded-lg shadow-[0_4px_24px_rgba(0,0,0,0.85)] z-50 overflow-hidden backdrop-blur-md"
+                    >
+                      {[
+                        { id: "relevance", label: "Relevance" },
+                        { id: "date", label: "Creation Date" },
+                        { id: "category", label: "Category Name" }
+                      ].map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            setSortBy(opt.id as any);
+                            setIsSortOpen(false);
+                            const logLabels = {
+                              relevance: "contextual relevance descending",
+                              date: "date created descending",
+                              category: "category name alphabetically ascending"
+                            };
+                            onLogMessage("INFO", `Re-indexed memory core state sorted by ${logLabels[opt.id as "relevance"|"date"|"category"]}.`);
+                          }}
+                          className={`w-full text-left px-3.5 py-2 hover:bg-cyan-500/10 transition-colors uppercase font-mono tracking-widest text-[8px] last:border-0 border-b border-cyan-500/5 ${
+                            sortBy === opt.id
+                              ? "text-cyan-300 font-bold bg-cyan-500/10"
+                              : "text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </motion.div>
+                  </>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 

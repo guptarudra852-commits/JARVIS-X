@@ -21,6 +21,7 @@ import {
   Code,
   Grid,
 } from "lucide-react";
+import { auth } from "../lib/firebase";
 
 interface HolographicHUDProps {
   setWorkspaceLayout: (layout: "clean" | "holographic") => void;
@@ -31,6 +32,8 @@ interface HolographicHUDProps {
   activeThemeId: string;
   handleThemeShift: (themeId: string) => void;
   currentTheme?: any;
+  userCredits?: number | null;
+  setUserCredits?: (val: number | null) => void;
 }
 
 interface ChatMessage {
@@ -50,6 +53,8 @@ export default function HolographicHUD({
   setWorkspaceLayout,
   setIsLightMode,
   soundEnabled,
+  userCredits,
+  setUserCredits,
 }: HolographicHUDProps) {
 
   // LIVE CLOCK STATE FOR CAPSULE
@@ -305,11 +310,24 @@ export default function HolographicHUD({
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: chatPayload }),
+        body: JSON.stringify({
+          messages: chatPayload,
+          userUid: auth.currentUser?.uid,
+          userEmail: auth.currentUser?.email,
+          userDisplayName: auth.currentUser?.displayName
+        }),
       });
 
-      if (!res.ok) throw new Error("Connection timed out");
+      if (!res.ok) {
+        if (res.status === 402) {
+          throw new Error("Insufficient security credits. Balance recovers tomorrow, or contact Admin.");
+        }
+        throw new Error("Connection timed out in neural system.");
+      }
       const data = await res.json();
+      if (typeof data.remainingCredits === "number") {
+        setUserCredits?.(data.remainingCredits);
+      }
 
       const botTimeFormat = new Date().toLocaleTimeString([], {
         hour: "2-digit",

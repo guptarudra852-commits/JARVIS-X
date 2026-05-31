@@ -35,6 +35,7 @@ import {
 
 import HolographicEarth from "../HolographicEarth";
 import { safeLocalStorage } from "../../utils/safeLocalStorage";
+import { auth } from "../../lib/firebase";
 
 interface SearchSource {
   title: string;
@@ -269,7 +270,10 @@ export default function JarvisSearch({ onLogMessage }: JarvisSearchProps) {
         deepSearch,
         image: attachedImage ? { data: attachedImage.data, mimeType: attachedImage.type } : null,
         pdfText: attachedFile ? attachedFile.text : null,
-        history: [] // Standard fresh search chat scope
+        history: [], // Standard fresh search chat scope
+        userUid: auth.currentUser?.uid,
+        userEmail: auth.currentUser?.email,
+        userDisplayName: auth.currentUser?.displayName
       };
 
       const res = await fetch("/api/search", {
@@ -279,6 +283,9 @@ export default function JarvisSearch({ onLogMessage }: JarvisSearchProps) {
       });
 
       if (!res.ok) {
+        if (res.status === 402) {
+          throw new Error("Insufficient security credentials or credits. Balance automatically resets tomorrow at 00:00.");
+        }
         throw new Error(`Satellite disconnect. Status code: ${res.status}`);
       }
 
