@@ -29,7 +29,59 @@ try {
   }
 }
 
+// Helper to get a writable path for serverless/transient environments like Vercel
+const getWritablePath = (subdir: string, filename: string): string => {
+  const originalPath = path.join(process.cwd(), "src", subdir, filename);
+  if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
+    const tmpDir = path.join("/tmp", subdir);
+    if (!fs.existsSync(tmpDir)) {
+      try {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      } catch (err: any) {
+        console.warn(`Could not create transient directory ${tmpDir}:`, err.message);
+      }
+    }
+    const tmpPath = path.join(tmpDir, filename);
+    if (!fs.existsSync(tmpPath) && fs.existsSync(originalPath)) {
+      try {
+        fs.copyFileSync(originalPath, tmpPath);
+        console.log(`Successfully migrated seed file from ${originalPath} to writable /tmp path: ${tmpPath}`);
+      } catch (err: any) {
+        console.warn(`Could not migrate seed file to ${tmpPath}:`, err.message);
+      }
+    }
+    return tmpPath;
+  }
+
+  // Local environment safe fallback: make sure the directory actually exists
+  const origDir = path.join(process.cwd(), "src", subdir);
+  if (!fs.existsSync(origDir)) {
+    try {
+      fs.mkdirSync(origDir, { recursive: true });
+    } catch (e) {}
+  }
+  return originalPath;
+};
+
+// Load the database ID dynamically from firebase-applet-config.json for dev environments
+let customDatabaseId: string | undefined = undefined;
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (config.firestoreDatabaseId && process.env.NODE_ENV !== "production") {
+      customDatabaseId = config.firestoreDatabaseId;
+      console.log(`JARVIS X Firestore: Found cloud database parameter matching: ${customDatabaseId}`);
+    }
+  }
+} catch (err: any) {
+  console.warn("Could not load firebase-applet-config.json dynamically:", err.message);
+}
+
 const getDbAdmin = () => {
+  if (customDatabaseId && customDatabaseId !== "(default)") {
+    return getAdminFirestore(customDatabaseId);
+  }
   return getAdminFirestore();
 };
 
@@ -112,7 +164,7 @@ async function initializeDatabaseTable() {
       const count = parseInt(countRes.rows[0].count, 10);
       if (count === 0) {
         console.log("Memories table is empty. Pre-seeding initial database rows from JSON cache...");
-        const filePath = path.join(process.cwd(), "src", "data", "memories_data.json");
+        const filePath = getWritablePath("data", "memories_data.json");
         if (fs.existsSync(filePath)) {
           const raw = fs.readFileSync(filePath, "utf-8");
           const list = JSON.parse(raw);
@@ -184,10 +236,17 @@ const allowedOrigins = [
 app.use(cors({
   origin: (origin, callback) => {
     // Return true for non-browser clients (like curl/postman) or matching origins
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".run.app")) {
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      origin.endsWith(".run.app") ||
+      origin.endsWith(".vercel.app") ||
+      origin.includes("localhost") ||
+      origin.includes("127.0.0.1")
+    ) {
       callback(null, true);
     } else {
-      callback(new Error("CORS Policy Violation: Origin not whitelisted."));
+      callback(new Error(`CORS Policy Violation: Origin not whitelisted.`));
     }
   },
   methods: ["GET", "POST", "DELETE", "OPTIONS"],
@@ -268,11 +327,7 @@ async function getUserCreditsState(uid: string, email?: string, displayName?: st
   }
 
   // Fallback to local user_credits.json file
-  const creditsDir = path.join(process.cwd(), "src", "data");
-  if (!fs.existsSync(creditsDir)) {
-    fs.mkdirSync(creditsDir, { recursive: true });
-  }
-  const creditsPath = path.join(creditsDir, "user_credits.json");
+  const creditsPath = getWritablePath("data", "user_credits.json");
   let localDb: Record<string, any> = {};
   if (fs.existsSync(creditsPath)) {
     try {
@@ -358,7 +413,7 @@ async function deductUserCredits(uid: string, amount: number, action: string, em
   }
 
   // Backup write local JSON file
-  const creditsPath = path.join(process.cwd(), "src", "data", "user_credits.json");
+  const creditsPath = getWritablePath("data", "user_credits.json");
   let localDb: Record<string, any> = {};
   if (fs.existsSync(creditsPath)) {
     try {
@@ -412,7 +467,7 @@ async function overrideUserCredits(adminUid: string, targetUid: string, newCredi
     }
   }
 
-  const creditsPath = path.join(process.cwd(), "src", "data", "user_credits.json");
+  const creditsPath = getWritablePath("data", "user_credits.json");
   let localDb: Record<string, any> = {};
   if (fs.existsSync(creditsPath)) {
     try {
@@ -551,7 +606,7 @@ async function getModelTrainingData(lastUserMsg: string): Promise<string> {
 
 function loadMemoriesFromJson(): any[] {
   try {
-    const filePath = path.join(process.cwd(), "src", "data", "memories_data.json");
+    const filePath = getWritablePath("data", "memories_data.json");
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       return JSON.parse(raw);
@@ -1009,7 +1064,7 @@ app.get("/api/memories", async (req, res) => {
       }
     }
 
-    const filePath = path.join(process.cwd(), "src", "data", "memories_data.json");
+    const filePath = getWritablePath("data", "memories_data.json");
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       return res.json(JSON.parse(raw));
@@ -1080,7 +1135,7 @@ app.post("/api/memories", async (req, res) => {
       }
     }
 
-    const filePath = path.join(process.cwd(), "src", "data", "memories_data.json");
+    const filePath = getWritablePath("data", "memories_data.json");
     let list: any[] = [];
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
@@ -1245,7 +1300,7 @@ app.delete("/api/memories/:id", async (req, res) => {
       }
     }
 
-    const filePath = path.join(process.cwd(), "src", "data", "memories_data.json");
+    const filePath = getWritablePath("data", "memories_data.json");
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       let list = JSON.parse(raw);
@@ -1275,12 +1330,7 @@ app.post("/api/chat/history", (req, res) => {
       return res.status(400).json({ error: "Messages array is required." });
     }
 
-    const historyDir = path.join(process.cwd(), "src", "data");
-    if (!fs.existsSync(historyDir)) {
-      fs.mkdirSync(historyDir, { recursive: true });
-    }
-
-    const historyPath = path.join(historyDir, "chat_history.json");
+    const historyPath = getWritablePath("data", "chat_history.json");
     let database: Record<string, any> = {};
     if (fs.existsSync(historyPath)) {
       try {
@@ -1308,7 +1358,7 @@ app.post("/api/chat/history", (req, res) => {
 app.get("/api/chat/history", (req, res) => {
   try {
     const { userEmail } = req.query;
-    const historyPath = path.join(process.cwd(), "src", "data", "chat_history.json");
+    const historyPath = getWritablePath("data", "chat_history.json");
     if (fs.existsSync(historyPath)) {
       const raw = fs.readFileSync(historyPath, "utf-8");
       const database = JSON.parse(raw);
@@ -2408,7 +2458,17 @@ async function setupVite() {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+      // If the URL is an API call, return a proper API 404 JSON. Do not return index.html
+      if (req.path.startsWith("/api")) {
+        return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.path}` });
+      }
+
+      const indexPath = path.join(distPath, "index.html");
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(404).json({ error: "Client-side build directory or entrypoint index.html is missing on serverless runtime." });
+      }
     });
   }
 

@@ -22,7 +22,13 @@ const app = initializeApp({
   appId: firebaseConfig.appId,
 });
 
-export const db = getFirestore(app);
+const dbId = (firebaseConfig as any).firestoreDatabaseId && 
+  (firebaseConfig as any).firestoreDatabaseId !== "(default)" && 
+  !(import.meta as any).env?.PROD
+  ? (firebaseConfig as any).firestoreDatabaseId
+  : undefined;
+
+export const db = dbId ? getFirestore(app, dbId) : getFirestore(app);
 
 const realAuth = initializeAuth(app, {
   persistence: [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence],
