@@ -30,6 +30,10 @@ try {
   }
 }
 
+const getDbAdmin = () => {
+  return getAdminFirestore();
+};
+
 // App Check Token Verification Middleware (Consumable/Limited-Use support)
 const appCheckVerification = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const appCheckToken = req.header("X-Firebase-AppCheck");
@@ -235,7 +239,7 @@ async function getUserCreditsState(uid: string, email?: string, displayName?: st
   // Try Firestore first if admin initialized
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore();
+      const dbAdmin = getDbAdmin();
       const userRef = dbAdmin.collection("users").doc(uid);
       const docSnap = await userRef.get();
 
@@ -341,7 +345,7 @@ async function deductUserCredits(uid: string, amount: number, action: string, em
 
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore();
+      const dbAdmin = getDbAdmin();
       const userRef = dbAdmin.collection("users").doc(uid);
       await userRef.update({
         credits: newCredits,
@@ -396,7 +400,7 @@ async function overrideUserCredits(adminUid: string, targetUid: string, newCredi
 
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore();
+      const dbAdmin = getDbAdmin();
       const userRef = dbAdmin.collection("users").doc(targetUid);
       await userRef.update({
         credits: newCreditsVal,
