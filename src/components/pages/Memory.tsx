@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2, LayoutGrid, Server } from "lucide-react";
+import { BrainCircuit, Search, Plus, Trash2, Edit3, Bookmark, AlertCircle, Save, ArrowUpDown, Sparkles, Image as ImageIcon, Loader2, LayoutGrid, Server, FileText } from "lucide-react";
 import { MemoryCard } from "../../types";
 import { auth } from "../../lib/firebase";
+import { exportMemoriesToPDF } from "../../utils/pdfExport";
 
 interface FixedSizeListProps {
   height: number;
@@ -107,6 +108,28 @@ export default function Memory({ onLogMessage }: MemoryProps) {
   const [editCategory, setEditCategory] = useState<"personal" | "task" | "preference" | "system">("preference");
 
   const [isCreating, setIsCreating] = useState(false);
+  const [exportingPDF, setExportingPDF] = useState(false);
+
+  const handleExportToPDF = async () => {
+    try {
+      setExportingPDF(true);
+      onLogMessage("INFO", "Initiating PDF compilation block for active memory schematic...");
+      
+      await exportMemoriesToPDF(sortedMemories, {
+        searchTerm,
+        filterCategory,
+        sortBy,
+        userEmail: auth.currentUser?.email
+      });
+      
+      onLogMessage("CORE", "Successfully finalized and compiled memory schematic PDF document.");
+    } catch (err: any) {
+      console.error("PDF generation failed:", err);
+      onLogMessage("ERROR", `Failed to export memory schematic: ${err.message}`);
+    } finally {
+      setExportingPDF(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     const deleted = memories.find((m) => m.id === id);
@@ -254,20 +277,43 @@ export default function Memory({ onLogMessage }: MemoryProps) {
           <p className="text-xs font-mono text-cyan-400/60 mt-1 uppercase">PERSISTENT SYSTEM MEMORY PARADIGMS AND CONTEXT VECTOR FIELDS</p>
         </div>
 
-        {/* Action button to create */}
-        <button
-          id="create-synapse-button"
-          onClick={() => {
-            setIsCreating(!isCreating);
-            setIsEditingId(null);
-            setEditTitle("");
-            setEditContent("");
-            setEditImageUrl("");
-          }}
-          className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-lg text-xs font-mono transition-all cursor-pointer"
-        >
-          <Plus size={14} /> {isCreating ? "CANCEL_EDIT" : "CREATE_SYNAPSE"}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Action button to export PDF */}
+          <button
+            id="export-pdf-button"
+            onClick={handleExportToPDF}
+            disabled={exportingPDF}
+            className="flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-emerald-500/10 to-teal-500/10 hover:from-emerald-500/20 hover:to-teal-500/20 border border-emerald-500/30 hover:border-emerald-500/50 text-emerald-300 font-semibold rounded-lg text-xs font-mono transition-all cursor-pointer disabled:opacity-50 shadow-[0_0_12px_rgba(16,185,129,0.15)]"
+            title="Export Memory Schematic Dossier to PDF document"
+          >
+            {exportingPDF ? (
+              <>
+                <Loader2 size={12} className="animate-spin text-emerald-400" />
+                <span>COMPILING_PDF_DOSSIER...</span>
+              </>
+            ) : (
+              <>
+                <FileText size={12} className="text-emerald-400" />
+                <span>EXPORT_SCHEMATIC</span>
+              </>
+            )}
+          </button>
+
+          {/* Action button to create */}
+          <button
+            id="create-synapse-button"
+            onClick={() => {
+              setIsCreating(!isCreating);
+              setIsEditingId(null);
+              setEditTitle("");
+              setEditContent("");
+              setEditImageUrl("");
+            }}
+            className="flex items-center gap-1.5 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-black font-semibold rounded-lg text-xs font-mono transition-all cursor-pointer shadow-[0_0_12px_rgba(6,182,212,0.2)]"
+          >
+            <Plus size={14} /> {isCreating ? "CANCEL_EDIT" : "CREATE_SYNAPSE"}
+          </button>
+        </div>
       </div>
 
       {/* Grid Filter Toolbar */}
