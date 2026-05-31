@@ -235,7 +235,7 @@ async function getUserCreditsState(uid: string, email?: string, displayName?: st
   // Try Firestore first if admin initialized
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore("ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac");
+      const dbAdmin = getAdminFirestore();
       const userRef = dbAdmin.collection("users").doc(uid);
       const docSnap = await userRef.get();
 
@@ -341,7 +341,7 @@ async function deductUserCredits(uid: string, amount: number, action: string, em
 
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore("ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac");
+      const dbAdmin = getAdminFirestore();
       const userRef = dbAdmin.collection("users").doc(uid);
       await userRef.update({
         credits: newCredits,
@@ -396,7 +396,7 @@ async function overrideUserCredits(adminUid: string, targetUid: string, newCredi
 
   if (adminAppInitialized) {
     try {
-      const dbAdmin = getAdminFirestore("ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac");
+      const dbAdmin = getAdminFirestore();
       const userRef = dbAdmin.collection("users").doc(targetUid);
       await userRef.update({
         credits: newCreditsVal,

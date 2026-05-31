@@ -22,10 +22,7 @@ const app = initializeApp({
   appId: firebaseConfig.appId,
 });
 
-export const db = getFirestore(
-  app,
-  "ai-studio-99d4082e-639e-46a4-9823-b0b9903914ac"
-);
+export const db = getFirestore(app);
 
 const realAuth = initializeAuth(app, {
   persistence: [indexedDBLocalPersistence, browserLocalPersistence, browserSessionPersistence],
