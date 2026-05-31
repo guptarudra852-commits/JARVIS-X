@@ -1,7 +1,6 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { Pool } from "pg";
 import helmet from "helmet";
@@ -2399,7 +2398,8 @@ app.post("/api/recaptcha/verify", async (req, res) => {
 // Setup Vite Dev Middleware or Serve Static Build Files
 async function setupVite() {
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
+    const { createServer } = await import("vite");
+    const vite = await createServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
